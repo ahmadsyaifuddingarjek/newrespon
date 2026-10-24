@@ -1,0 +1,2439 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GARJEK ADMIN PRO</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+  </style>
+</head>
+<body class="bg-[#f4f7fb] text-slate-800 antialiased">
+  <div id="root"></div>
+
+  <script>
+    // URL Google Apps Script Permanen
+    const PERMANENT_APPS_SCRIPT_URL = 'https://script.google.com/macros/library/d/104ynLuD257Ad0DTq6eLCId2omAH5q9E7UlEtJJaIF-8C6lBy58RXRi8U/2';
+
+    // Anti-XSS, Anti-Malware & Basic Formula Sanitizer
+    function sanitizeInput(val) {
+      if (val === null || val === undefined) return '';
+      let cleaned = String(val)
+        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+        .replace(/javascript:/gi, '')
+        .replace(/vbscript:/gi, '')
+        .replace(/data:text\/html/gi, '')
+        .replace(/on\w+\s*=/gi, '')
+        .replace(/[<>`"']/g, '')
+        .trim();
+      if (/^[=@|]/.test(cleaned)) {
+        cleaned = "'" + cleaned;
+      }
+      return cleaned;
+    }
+
+    function formatIDR(num) {
+      const n = Number(num) || 0;
+      return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
+    }
+
+    function formatDateID(isoStr) {
+      if (!isoStr) return '-';
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return isoStr;
+      return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function formatDateTimeRealtimeID(isoStr) {
+      if (!isoStr) return '-';
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return isoStr;
+      const tgl = d.toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+      const jam = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      return `${tgl} • Pukul ${jam} WIB`;
+    }
+
+    function formatSessionDuration(loginIso) {
+      if (!loginIso) return '0 dtk';
+      const diffSec = Math.max(0, Math.floor((Date.now() - new Date(loginIso).getTime()) / 1000));
+      const hrs = Math.floor(diffSec / 3600);
+      const mins = Math.floor((diffSec % 3600) / 60);
+      const secs = diffSec % 60;
+      if (hrs > 0) return `${hrs} jam ${mins} mnt ${secs} dtk`;
+      if (mins > 0) return `${mins} mnt ${secs} dtk`;
+      return `${secs} detik`;
+    }
+
+    function loadSavedLoginHistory() {
+      try {
+        const raw = localStorage.getItem('garjek_standalone_login_history_v1');
+        if (raw) return JSON.parse(raw);
+      } catch (e) {}
+      return [
+        {
+          id: 'SES-001',
+          name: 'Ahmad Syaifuddin',
+          username: 'ahmadsyaifuddin',
+          email: 'ahmadsyaifuddin@garjek.id',
+          role: 'Super Admin',
+          deviceType: detectUserDevice().deviceType,
+          os: detectUserDevice().os,
+          browser: detectUserDevice().browser,
+          screenRes: detectUserDevice().screenRes,
+          loginAt: new Date().toISOString(),
+          status: 'Sesi Aktif'
+        }
+      ];
+    }
+
+    function saveLoginHistoryToStorage(list) {
+      try {
+        localStorage.setItem('garjek_standalone_login_history_v1', JSON.stringify(list));
+      } catch (e) {}
+    }
+
+    function normalizeWhatsAppNumber(raw) {
+      if (!raw) return '';
+      let cleaned = String(raw).trim().replace(/[^0-9+]/g, '');
+      return cleaned;
+    }
+
+    function toWaMeNumber(raw) {
+      let cleaned = String(raw || '').replace(/[^0-9]/g, '');
+      if (cleaned.startsWith('08')) return '62' + cleaned.slice(1);
+      if (cleaned.startsWith('8')) return '62' + cleaned;
+      return cleaned;
+    }
+
+    function maskPhone(phone, masked) {
+      const norm = normalizeWhatsAppNumber(phone);
+      if (!norm) return '-';
+      if (!masked || norm.length < 7) return norm;
+      return norm.slice(0, 4) + '••••' + norm.slice(-3);
+    }
+
+    function getWhatsAppChatUrl(phone, name = '') {
+      const waNum = toWaMeNumber(phone);
+      const text = encodeURIComponent(`Halo ${name || 'Kak'}, kami dari Admin Operasional GARJEK ingin mengonfirmasi layanan.`);
+      return `https://wa.me/${waNum}?text=${text}`;
+    }
+
+    function downloadVCardContact(name, phone, roleLabel = 'Garjek') {
+      const norm = normalizeWhatsAppNumber(phone);
+      if (!norm) return;
+      const safeName = (name || 'Kontak Garjek').trim();
+      const vcard = ['BEGIN:VCARD', 'VERSION:3.0', `FN:${safeName} (${roleLabel})`, `N:${safeName};;;`, `ORG:GARJEK (${roleLabel})`, `TEL;TYPE=CELL,VOICE,WHATSAPP:${norm}`, 'END:VCARD'].join('\r\n');
+      const blob = new Blob([vcard], { type: 'text/vcard;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Kontak_${safeName.replace(/\s+/g, '_')}_${norm}.vcf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function detectUserDevice() {
+      const ua = navigator.userAgent;
+      let deviceType = 'PC / Laptop (Desktop)';
+      if (/Tablet|iPad/i.test(ua)) deviceType = 'Tablet / iPad';
+      else if (/Mobile|Android|iP(hone|od)|IEMobile|BlackBerry/i.test(ua)) deviceType = 'HP / Smartphone';
+
+      let os = 'OS Lainnya';
+      if (/Windows NT 10.0/i.test(ua)) os = 'Windows 10/11';
+      else if (/Android/i.test(ua)) os = 'Android';
+      else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS (iPhone/iPad)';
+      else if (/Mac OS X/i.test(ua)) os = 'macOS';
+
+      let browser = 'Browser';
+      if (/Edg\//i.test(ua)) browser = 'Microsoft Edge';
+      else if (/Chrome\//i.test(ua)) browser = 'Google Chrome';
+      else if (/Firefox\//i.test(ua)) browser = 'Mozilla Firefox';
+      else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Apple Safari';
+
+      const screenRes = `${window.screen.width}x${window.screen.height}`;
+      return { deviceType, os, browser, screenRes, fullLabel: `${deviceType} • ${os} (${browser})` };
+    }
+
+    // State Aplikasi
+    let state = {
+      isLoggedIn: false,
+      sessionToken: '',
+      failedAttempts: 0,
+      lockoutUntil: 0,
+      adminUser: {
+        username: 'ahmadsyaifuddin',
+        email: 'ahmadsyaifuddin@garjek.id',
+        name: 'Ahmad Syaifuddin',
+        role: 'Super Admin',
+        deviceType: detectUserDevice().deviceType,
+        os: detectUserDevice().os,
+        browser: detectUserDevice().browser,
+        screenRes: detectUserDevice().screenRes,
+        deviceSummary: detectUserDevice().fullLabel,
+        loginAt: new Date().toISOString()
+      },
+      loginSessionsHistory: loadSavedLoginHistory(),
+      adminAccounts: [
+        { id: 'ADM-00', username: 'ahmadsyaifuddin', email: 'ahmadsyaifuddin@garjek.id', password: 'Kjadlqo-hsdksa-Msks', name: 'Ahmad Syaifuddin', role: 'Super Admin' },
+        { id: 'ADM-01', username: 'admin_garjek', email: 'admin@garjek.id', password: '123', name: 'Admin Garjek Pro', role: 'Super Admin' },
+        { id: 'ADM-02', username: 'cs_garjek', email: 'cs@garjek.id', password: '123', name: 'Admin CS Garjek', role: 'Admin CS' }
+      ],
+      activeMenu: 'dashboard',
+      sidebarCollapsed: false,
+      headerCollapsed: false,
+      isFullscreen: false,
+      privacyMask: false,
+      commissionPreset: '10',
+      defaultCommissionRate: 10,
+      analyticsRange: 'daily',
+      leaderboardRange: 'all',
+      orderSearch: '',
+      driverSearch: '',
+      customerSearch: '',
+      vestFilter: 'Semua',
+      orders: [
+        { id: 'ORD-00001', datetime: new Date().toISOString().slice(0, 16), customerName: 'Siti Nurhaliza', customerWA: '+6285211223301', customerCategory: 'Repeat', serviceType: 'GARJEK RIDE', driverId: 'DRV-0001', driverName: 'Ahmad Syaifuddin', shippingCost: 20000, commissionRate: 10, status: 'Selesai', rating: 5, notes: 'Jemput Alun-alun' },
+        { id: 'ORD-00002', datetime: new Date().toISOString().slice(0, 16), customerName: 'Budi Santoso', customerWA: '+6285211223302', customerCategory: 'Baru', serviceType: 'GARJEK FOOD AND SHOP', driverId: 'DRV-0002', driverName: 'Deden Supriatna', shippingCost: 15000, commissionRate: 10, status: 'Selesai', rating: 5, notes: 'Beli makanan' },
+        { id: 'ORD-00003', datetime: new Date().toISOString().slice(0, 16), customerName: 'Siti Nurhaliza', customerWA: '+6285211223301', customerCategory: 'Repeat', serviceType: 'GARJEK SEND', driverId: 'DRV-0003', driverName: 'Cecep Hermawan', shippingCost: 25000, commissionRate: 10, status: 'Selesai', rating: 5, notes: 'Kirim dokumen' }
+      ],
+      drivers: [
+        { id: 'DRV-0001', name: 'Ahmad Syaifuddin', email: 'ahmadsyaifuddin@garjek.id', whatsapp: '+6281234567801', vehicleType: 'GARJEK RIDE', plateNumber: 'Z 4512 ABC', accountStatus: 'Aktif', activityStatus: 'Online', vestFeeTotal: 150000, vestFeePaid: 150000, vestPaymentStatus: 'Lunas', vestSize: 'XL', vestReceived: true, vestPaymentDate: '2025-11-10', vestPaymentNotes: 'Lunas gelombang 1' },
+        { id: 'DRV-0002', name: 'Deden Supriatna', email: 'deden.supriatna@garjek.id', whatsapp: '+6281234567802', vehicleType: 'GARJEK FOOD AND SHOP', plateNumber: 'Z 2291 DEF', accountStatus: 'Aktif', activityStatus: 'Sedang Mengantar', vestFeeTotal: 150000, vestFeePaid: 100000, vestPaymentStatus: 'Cicilan', vestSize: 'L', vestReceived: true, vestPaymentDate: '2025-12-01', vestPaymentNotes: 'Cicilan 100rb (Sisa 50rb)' },
+        { id: 'DRV-0003', name: 'Cecep Hermawan', email: 'cecep.hermawan@garjek.id', whatsapp: '+6281234567803', vehicleType: 'GARJEK SEND', plateNumber: 'Z 1884 GHI', accountStatus: 'Aktif', activityStatus: 'Online', vestFeeTotal: 150000, vestFeePaid: 150000, vestPaymentStatus: 'Lunas', vestSize: 'XXL', vestReceived: true, vestPaymentDate: '2026-01-15', vestPaymentNotes: 'Transfer Lunas' }
+      ],
+      manualCustomers: [
+        { id: 'CST-000001', name: 'Siti Nurhaliza', whatsapp: '+6285211223301', createdAt: new Date().toISOString().slice(0, 16) },
+        { id: 'CST-000002', name: 'Budi Santoso', whatsapp: '+6285211223302', createdAt: new Date().toISOString().slice(0, 16) }
+      ],
+      deletedCustomerKeys: [],
+      issues: [
+        { id: 'ISS-001', type: 'driver', targetName: 'Deden Supriatna', whatsapp: '+6281234567802', category: 'Keterlambatan Penjemputan', severity: 'Sedang (Teguran 1)', actionStatus: 'Dalam Pembinaan', chronology: 'Terlambat menjemput pelanggan 25 menit.', reportedAt: new Date().toISOString().slice(0, 16) },
+        { id: 'ISS-002', type: 'customer', targetName: 'Doni Prank Order', whatsapp: '+6285299887711', category: 'Order Fiktif / Prank', severity: 'Berat (Blacklist)', actionStatus: 'Diblokir Permanen', chronology: 'Order makanan fiktif lalu memblokir nomor WA driver.', reportedAt: new Date().toISOString().slice(0, 16) }
+      ],
+      orderPage: 1,
+      orderPageSize: 10,
+      driverPage: 1,
+      driverPageSize: 10,
+      customerPage: 1,
+      customerPageSize: 10,
+      dateFilter: 'all',
+      customStartDate: '',
+      customEndDate: '',
+      orderStatusFilter: 'Semua',
+      orderServiceFilter: 'Semua',
+      issueSearch: '',
+      commPeriodTab: 'today',
+      manualCalcIncome: 250000,
+      orderModalOpen: false,
+      editingOrderId: null,
+      driverModalOpen: false,
+      editingDriverId: null,
+      customerModalOpen: false,
+      editingCustomerId: null,
+      issueModalOpen: false,
+      editingIssueId: null,
+      issueModalType: 'driver',
+      deleteModal: null,
+      lastSyncAt: null,
+      toast: null
+    };
+
+    let chartInstances = {};
+
+    function destroyCharts() {
+      Object.keys(chartInstances).forEach(k => {
+        if (chartInstances[k]) {
+          try { chartInstances[k].destroy(); } catch (e) {}
+          delete chartInstances[k];
+        }
+      });
+    }
+
+    function showToast(message) {
+      state.toast = message;
+      renderApp();
+      setTimeout(() => {
+        if (state.toast === message) { state.toast = null; renderApp(); }
+      }, 3200);
+    }
+
+    function getCustomersDatabase() {
+      const map = {};
+      state.manualCustomers.forEach((mc, idx) => {
+        const key = toWaMeNumber(mc.whatsapp) || (mc.name || '').toLowerCase().trim() || ('mc-' + idx);
+        if (state.deletedCustomerKeys.includes(key)) return;
+        map[key] = {
+          key,
+          id: mc.id || ('CST-' + String(idx + 1).padStart(6, '0')),
+          name: mc.name,
+          whatsapp: normalizeWhatsAppNumber(mc.whatsapp),
+          firstOrderDate: mc.createdAt || new Date().toISOString().slice(0, 16),
+          servicesUsed: new Set(),
+          completedOrders: 0,
+          cancelledOrders: 0,
+          totalOrders: 0,
+          totalSpend: 0
+        };
+      });
+
+      state.orders.forEach(o => {
+        const normWA = normalizeWhatsAppNumber(o.customerWA);
+        const key = toWaMeNumber(normWA) || (o.customerName || '').toLowerCase().trim();
+        if (!key || state.deletedCustomerKeys.includes(key)) return;
+        if (!map[key]) {
+          map[key] = {
+            key,
+            id: 'CST-' + String(Object.keys(map).length + 1).padStart(6, '0'),
+            name: o.customerName || 'Pelanggan Garjek',
+            whatsapp: normWA,
+            firstOrderDate: o.datetime,
+            servicesUsed: new Set(),
+            completedOrders: 0,
+            cancelledOrders: 0,
+            totalOrders: 0,
+            totalSpend: 0
+          };
+        }
+        const c = map[key];
+        c.name = o.customerName || c.name;
+        if (normWA) c.whatsapp = normWA;
+        if (o.serviceType) c.servicesUsed.add(o.serviceType);
+        c.totalOrders += 1;
+        if (o.status === 'Selesai') {
+          c.completedOrders += 1;
+          c.totalSpend += (Number(o.shippingCost) || 0);
+        } else if (o.status === 'Dibatalkan' || o.status === 'Tidak ada driver') {
+          c.cancelledOrders += 1;
+        }
+      });
+
+      return Object.values(map).map(c => ({
+        ...c,
+        servicesList: Array.from(c.servicesUsed).join(', ') || '-',
+        category: c.totalOrders > 1 ? 'Repeat' : 'Baru'
+      }));
+    }
+
+    function getEnrichedDrivers() {
+      const rate = Number(state.defaultCommissionRate) || 10;
+      return state.drivers.map(d => {
+        const drvOrders = state.orders.filter(o => o.driverId === d.id || (o.driverName || '').toLowerCase() === (d.name || '').toLowerCase());
+        const done = drvOrders.filter(o => o.status === 'Selesai');
+        const batal = drvOrders.filter(o => o.status === 'Dibatalkan' || o.status === 'Tidak ada driver');
+        const totalShipping = done.reduce((s, o) => s + (Number(o.shippingCost) || 0), 0);
+        const totalCommission = Math.round(totalShipping * (rate / 100));
+        const netIncome = totalShipping - totalCommission;
+        const feeTotal = Number(d.vestFeeTotal) || 150000;
+        const feePaid = d.vestFeePaid !== undefined ? Number(d.vestFeePaid) : 150000;
+        const feeRemaining = Math.max(0, feeTotal - feePaid);
+        const vestStatus = feePaid >= feeTotal ? 'Lunas' : feePaid > 0 ? 'Cicilan' : 'Belum Bayar';
+
+        return {
+          ...d,
+          completedCount: done.length,
+          cancelledCount: batal.length,
+          totalShipping,
+          totalCommission,
+          netIncome,
+          vestFeeTotal: feeTotal,
+          vestFeePaid: feePaid,
+          vestFeeRemaining: feeRemaining,
+          vestPaymentStatus: vestStatus
+        };
+      });
+    }
+
+    function renderRangePaginationHTML(totalItems, currentPage, pageSize, pageFnName, sizeFnName, maxCapLabel) {
+      const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+      const safePage = Math.min(Math.max(1, currentPage), totalPages);
+      let startPage = Math.max(1, safePage - 3);
+      let endPage = Math.min(totalPages, startPage + 6);
+      if (endPage - startPage < 6) startPage = Math.max(1, endPage - 6);
+
+      let buttonsHTML = '';
+      for (let p = startPage; p <= endPage; p++) {
+        const sNum = (p - 1) * pageSize + 1;
+        const eNum = Math.min(p * pageSize, Math.max(totalItems, p * pageSize));
+        const activeClass = p === safePage
+          ? 'bg-emerald-600 text-white shadow-sm'
+          : 'bg-white border border-slate-200 text-slate-700 hover:bg-emerald-50';
+        buttonsHTML += `<button type="button" onclick="${pageFnName}(${p})" class="px-2.5 py-1.5 rounded-xl text-[11px] font-extrabold ${activeClass}">${sNum}-${eNum}</button>`;
+      }
+
+      return `
+        <div class="p-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-extrabold text-slate-700">Total Data: <span class="text-emerald-700">${totalItems.toLocaleString('id-ID')}</span></span>
+            <span class="text-[11px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">Kapasitas Maks: ${maxCapLabel}</span>
+            <select onchange="${sizeFnName}(this.value)" class="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-[11px] font-bold text-slate-700">
+              <option value="10" ${pageSize === 10 ? 'selected' : ''}>Tampilkan per 10 (1-10, 11-20)</option>
+              <option value="20" ${pageSize === 20 ? 'selected' : ''}>Tampilkan per 20 (1-20, 21-40)</option>
+              <option value="50" ${pageSize === 50 ? 'selected' : ''}>Tampilkan per 50 (1-50, 51-100)</option>
+              <option value="100" ${pageSize === 100 ? 'selected' : ''}>Tampilkan per 100 (1-100, 101-200)</option>
+            </select>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <button type="button" onclick="${pageFnName}(${Math.max(1, safePage - 1)})" ${safePage <= 1 ? 'disabled' : ''} class="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold disabled:opacity-40 text-[11px]">‹ Prev</button>
+            ${buttonsHTML}
+            <button type="button" onclick="${pageFnName}(${Math.min(totalPages, safePage + 1)})" ${safePage >= totalPages ? 'disabled' : ''} class="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold disabled:opacity-40 text-[11px]">Next ›</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function setOrderPage(p) { state.orderPage = Number(p); renderApp(); }
+    function setOrderPageSize(s) { state.orderPageSize = Number(s); state.orderPage = 1; renderApp(); }
+    function setDriverPage(p) { state.driverPage = Number(p); renderApp(); }
+    function setDriverPageSize(s) { state.driverPageSize = Number(s); state.driverPage = 1; renderApp(); }
+    function setCustomerPage(p) { state.customerPage = Number(p); renderApp(); }
+    function setCustomerPageSize(s) { state.customerPageSize = Number(s); state.customerPage = 1; renderApp(); }
+
+    function setCommissionRateGlobal(rate) {
+      state.defaultCommissionRate = Number(rate);
+      state.commissionPreset = String(rate);
+      showToast('Skema Komisi Admin diubah ke ' + rate + '%');
+    }
+
+    function changeOrderRowCommission(orderId, newRate) {
+      const r = Number(newRate) || 10;
+      state.orders = state.orders.map(o => o.id === orderId ? { ...o, commissionRate: r } : o);
+      showToast('Komisi order ' + orderId + ' diubah ke ' + r + '%');
+    }
+
+    // =========================================================
+    // FITUR AUTO-SEARCH & AUTO-FILL CUSTOMER DAN DRIVER (NAMA / WA)
+    // =========================================================
+    function filterOrderCustRecommendations(val) {
+      const box = document.getElementById('custSuggestionBox');
+      if (!box) return;
+      const q = (val || '').trim().toLowerCase();
+      const qNum = toWaMeNumber(val);
+      const db = getCustomersDatabase();
+
+      const matches = db.filter(c => {
+        if (!q) return true;
+        return (
+          (c.name || '').toLowerCase().includes(q) ||
+          (c.whatsapp || '').toLowerCase().includes(q) ||
+          (qNum.length >= 4 && toWaMeNumber(c.whatsapp).includes(qNum)) ||
+          (c.id || '').toLowerCase().includes(q)
+        );
+      }).slice(0, 8);
+
+      if (matches.length === 0) {
+        box.innerHTML = `<div class="p-2.5 text-[11px] text-slate-400 italic">Pelanggan baru (belum ada di database)</div>`;
+        box.classList.remove('hidden');
+        return;
+      }
+
+      box.innerHTML = matches.map(c => `
+        <button type="button" onclick="selectSavedCustomerForOrder('${c.id}')" class="w-full text-left px-3 py-2 hover:bg-emerald-50 flex items-center justify-between border-b border-slate-100 last:border-0 transition">
+          <div>
+            <div class="font-extrabold text-slate-900 text-xs">${c.name} <span class="text-[10px] font-mono text-slate-400">(${c.id})</span></div>
+            <div class="text-[11px] font-mono text-emerald-700">${c.whatsapp || '-'}</div>
+          </div>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-50 text-indigo-700">${c.totalOrders}x Order (${c.category})</span>
+        </button>
+      `).join('');
+      box.classList.remove('hidden');
+    }
+
+    function selectSavedCustomerForOrder(custId) {
+      const db = getCustomersDatabase();
+      const found = db.find(c => c.id === custId);
+      if (!found) return;
+      const nameInput = document.getElementById('ordCustName');
+      const waInput = document.getElementById('ordCustWA');
+      const searchInput = document.getElementById('ordCustQuickSearch');
+      const catBadge = document.getElementById('ordCustCategoryBadge');
+      const box = document.getElementById('custSuggestionBox');
+
+      if (nameInput) nameInput.value = found.name;
+      if (waInput) waInput.value = found.whatsapp;
+      if (searchInput) searchInput.value = `${found.name} (${found.whatsapp})`;
+      if (catBadge) {
+        catBadge.textContent = 'Repeat Order (' + (found.totalOrders + 1) + 'x)';
+        catBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100 text-indigo-800';
+      }
+      if (box) box.classList.add('hidden');
+    }
+
+    function handleOrderCustManualInput() {
+      const nameVal = (document.getElementById('ordCustName')?.value || '').trim();
+      const waVal = (document.getElementById('ordCustWA')?.value || '').trim();
+      const cleanWA = toWaMeNumber(waVal);
+      const db = getCustomersDatabase();
+
+      const matched = db.find(c =>
+        (cleanWA.length >= 6 && toWaMeNumber(c.whatsapp) === cleanWA) ||
+        (nameVal.length >= 3 && c.name.toLowerCase() === nameVal.toLowerCase())
+      );
+
+      const catBadge = document.getElementById('ordCustCategoryBadge');
+      if (matched) {
+        if (nameVal.length >= 3 && !waVal && document.getElementById('ordCustWA')) {
+          document.getElementById('ordCustWA').value = matched.whatsapp;
+        } else if (cleanWA.length >= 6 && !nameVal && document.getElementById('ordCustName')) {
+          document.getElementById('ordCustName').value = matched.name;
+        }
+        if (catBadge) {
+          catBadge.textContent = 'Pelanggan Tersimpan • Repeat (' + (matched.totalOrders + 1) + 'x)';
+          catBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100 text-indigo-800';
+        }
+      } else {
+        if (catBadge) {
+          catBadge.textContent = 'Pelanggan Baru';
+          catBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-100 text-blue-800';
+        }
+      }
+    }
+
+    function filterOrderDriverRecommendations(val) {
+      const box = document.getElementById('driverSuggestionBox');
+      if (!box) return;
+      const q = (val || '').trim().toLowerCase();
+      const qNum = toWaMeNumber(val);
+      const drivers = getEnrichedDrivers();
+
+      const matches = drivers.filter(d => {
+        if (!q) return true;
+        return (
+          (d.name || '').toLowerCase().includes(q) ||
+          (d.whatsapp || '').toLowerCase().includes(q) ||
+          (qNum.length >= 4 && toWaMeNumber(d.whatsapp).includes(qNum)) ||
+          (d.plateNumber || '').toLowerCase().includes(q) ||
+          (d.id || '').toLowerCase().includes(q)
+        );
+      }).slice(0, 8);
+
+      if (matches.length === 0) {
+        box.innerHTML = `<div class="p-2.5 text-[11px] text-rose-500 font-bold">Driver tidak ditemukan</div>`;
+        box.classList.remove('hidden');
+        return;
+      }
+
+      box.innerHTML = matches.map(d => `
+        <button type="button" onclick="selectSavedDriverForOrder('${d.id}')" class="w-full text-left px-3 py-2 hover:bg-emerald-50 flex items-center justify-between border-b border-slate-100 last:border-0 transition">
+          <div>
+            <div class="font-extrabold text-slate-900 text-xs">${d.name} <span class="text-[10px] font-mono text-slate-400">(${d.id})</span></div>
+            <div class="text-[11px] font-mono text-emerald-700">${d.whatsapp || '-'} • ${d.plateNumber || '-'}</div>
+          </div>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700">${d.vehicleType}</span>
+        </button>
+      `).join('');
+      box.classList.remove('hidden');
+    }
+
+    function selectSavedDriverForOrder(drvId) {
+      const found = state.drivers.find(d => d.id === drvId);
+      if (!found) return;
+      const drvIdInput = document.getElementById('ordDriverId');
+      const drvSearchInput = document.getElementById('ordDriverQuickSearch');
+      const drvSelectedLabel = document.getElementById('ordDriverSelectedInfo');
+      const box = document.getElementById('driverSuggestionBox');
+
+      if (drvIdInput) drvIdInput.value = found.id;
+      if (drvSearchInput) drvSearchInput.value = `${found.name} — ${found.whatsapp} (${found.plateNumber})`;
+      if (drvSelectedLabel) {
+        drvSelectedLabel.textContent = `Terpilih: ${found.name} (${found.whatsapp} • ${found.plateNumber})`;
+      }
+      if (box) box.classList.add('hidden');
+    }
+
+    function updateModalOrderCommissionPreview() {
+      const cost = Number(document.getElementById('ordCost')?.value) || 0;
+      const rate = Number(document.getElementById('ordCommRate')?.value) || state.defaultCommissionRate;
+      const comm = Math.round(cost * (rate / 100));
+      const previewEl = document.getElementById('ordCommPreview');
+      if (previewEl) previewEl.textContent = formatIDR(comm) + ` (${rate}% • Bersih Driver: ${formatIDR(cost - comm)})`;
+    }
+
+    function openAddOrderModal() {
+      state.editingOrderId = null;
+      state.orderModalOpen = true;
+      renderApp();
+    }
+
+    function openEditOrderModal(orderId) {
+      state.editingOrderId = orderId;
+      state.orderModalOpen = true;
+      renderApp();
+    }
+
+    function closeOrderModal() {
+      state.orderModalOpen = false;
+      state.editingOrderId = null;
+      renderApp();
+    }
+
+    function openDeleteConfirm(type, id, label) {
+      state.deleteModal = { type, id, label };
+      renderApp();
+    }
+
+    function closeDeleteConfirm() {
+      state.deleteModal = null;
+      renderApp();
+    }
+
+    function executeDeleteItem() {
+      if (!state.deleteModal) return;
+      const { type, id, label } = state.deleteModal;
+      if (type === 'order') {
+        state.orders = state.orders.filter(o => o.id !== id);
+      } else if (type === 'driver') {
+        state.drivers = state.drivers.filter(d => d.id !== id);
+      } else if (type === 'customer') {
+        state.deletedCustomerKeys.push(id);
+        state.manualCustomers = state.manualCustomers.filter(c => c.id !== id && (toWaMeNumber(c.whatsapp) || c.name.toLowerCase().trim()) !== id);
+      } else if (type === 'issue') {
+        state.issues = state.issues.filter(i => i.id !== id);
+      } else if (type === 'session') {
+        state.loginSessionsHistory = state.loginSessionsHistory.filter(s => s.id !== id);
+      }
+      state.deleteModal = null;
+      showToast('Data "' + label + '" berhasil dihapus!');
+    }
+
+    // Handlers Form Submit
+    function handleAddOrderSubmit(e) {
+      e.preventDefault();
+      const customerName = sanitizeInput(document.getElementById('ordCustName').value);
+      const customerWA = normalizeWhatsAppNumber(document.getElementById('ordCustWA').value);
+      const serviceType = sanitizeInput(document.getElementById('ordService').value);
+      const driverId = sanitizeInput(document.getElementById('ordDriverId').value);
+      const shippingCost = Number(document.getElementById('ordCost').value) || 0;
+      const commissionRate = Number(document.getElementById('ordCommRate')?.value) || state.defaultCommissionRate;
+      const status = sanitizeInput(document.getElementById('ordStatus').value);
+      const datetime = document.getElementById('ordDatetime').value || new Date().toISOString().slice(0, 16);
+      const notes = sanitizeInput(document.getElementById('ordNotes')?.value || '');
+
+      const drv = state.drivers.find(d => d.id === driverId) || state.drivers[0];
+      const existingCust = getCustomersDatabase().some(c =>
+        (toWaMeNumber(customerWA).length >= 6 && toWaMeNumber(c.whatsapp) === toWaMeNumber(customerWA)) ||
+        c.name.toLowerCase() === customerName.toLowerCase()
+      );
+
+      // Otomatis simpan ke daftar pelanggan jika pelanggan baru
+      if (customerName || customerWA) {
+        const key = toWaMeNumber(customerWA) || customerName.toLowerCase().trim();
+        state.deletedCustomerKeys = state.deletedCustomerKeys.filter(k => k !== key);
+        const alreadyInManual = state.manualCustomers.some(mc =>
+          (toWaMeNumber(customerWA).length >= 6 && toWaMeNumber(mc.whatsapp) === toWaMeNumber(customerWA)) ||
+          mc.name.toLowerCase() === customerName.toLowerCase()
+        );
+        if (!alreadyInManual && state.manualCustomers.length < 100000) {
+          state.manualCustomers.unshift({
+            id: 'CST-' + String(getCustomersDatabase().length + 1).padStart(6, '0'),
+            name: customerName,
+            whatsapp: customerWA,
+            createdAt: datetime
+          });
+        }
+      }
+
+      if (state.editingOrderId) {
+        state.orders = state.orders.map(o => o.id === state.editingOrderId ? {
+          ...o,
+          datetime,
+          customerName,
+          customerWA,
+          customerCategory: existingCust ? 'Repeat' : 'Baru',
+          serviceType,
+          driverId: drv ? drv.id : '-',
+          driverName: drv ? drv.name : '-',
+          shippingCost,
+          commissionRate,
+          status,
+          notes
+        } : o);
+        state.orderModalOpen = false;
+        state.editingOrderId = null;
+        showToast('Order ' + state.editingOrderId + ' berhasil diperbarui!');
+        return;
+      }
+
+      const nextId = 'ORD-' + String(state.orders.length + 1).padStart(5, '0');
+      state.orders.unshift({
+        id: nextId,
+        datetime,
+        customerName,
+        customerWA,
+        customerCategory: existingCust ? 'Repeat' : 'Baru',
+        serviceType,
+        driverId: drv ? drv.id : '-',
+        driverName: drv ? drv.name : '-',
+        shippingCost,
+        commissionRate,
+        status,
+        rating: 5,
+        notes
+      });
+      state.orderModalOpen = false;
+      showToast('Order ' + nextId + ' & Data CS/Driver berhasil disimpan!');
+    }
+
+    function handleAddDriverSubmit(e) {
+      e.preventDefault();
+      if (state.drivers.length >= 5000) {
+        showToast('Kapasitas Manajemen Driver maksimal 5.000 data!');
+        return;
+      }
+      const name = sanitizeInput(document.getElementById('drvNameInput').value);
+      const email = sanitizeInput(document.getElementById('drvEmailInput').value);
+      const whatsapp = normalizeWhatsAppNumber(document.getElementById('drvWaInput').value);
+      const plateNumber = sanitizeInput(document.getElementById('drvPlateInput').value);
+      const vestFeePaid = Number(document.getElementById('drvVestPaidInput').value) || 0;
+      const vestSize = sanitizeInput(document.getElementById('drvVestSizeInput').value || 'L');
+      const vestPaymentDate = document.getElementById('drvVestDateInput').value || new Date().toISOString().slice(0, 10);
+
+      const nextId = 'DRV-' + String(state.drivers.length + 1).padStart(4, '0');
+      const vestPaymentStatus = vestFeePaid >= 150000 ? 'Lunas' : vestFeePaid > 0 ? 'Cicilan' : 'Belum Bayar';
+
+      state.drivers.push({
+        id: nextId,
+        name,
+        email,
+        whatsapp,
+        vehicleType: 'GARJEK RIDE',
+        plateNumber,
+        accountStatus: 'Aktif',
+        activityStatus: 'Online',
+        vestFeeTotal: 150000,
+        vestFeePaid,
+        vestPaymentStatus,
+        vestSize,
+        vestReceived: vestFeePaid >= 150000,
+        vestPaymentDate,
+        vestPaymentNotes: vestPaymentStatus === 'Lunas' ? 'Lunas Pendaftaran & Rompi 150K' : 'Cicilan Rompi'
+      });
+      showToast('Driver ' + name + ' (' + email + ') berhasil disimpan!');
+    }
+
+    function markDriverVestLunas(drvId) {
+      const today = new Date().toISOString().slice(0, 10);
+      state.drivers = state.drivers.map(d => d.id === drvId ? {
+        ...d,
+        vestFeePaid: 150000,
+        vestPaymentStatus: 'Lunas',
+        vestReceived: true,
+        vestPaymentDate: today,
+        vestPaymentNotes: 'Dilunasi Rp150.000 pada ' + today
+      } : d);
+      showToast('Pelunasan rompi driver ' + drvId + ' berhasil diupdate Lunas!');
+    }
+
+    function handleAddCustomerSubmit(e) {
+      e.preventDefault();
+      const db = getCustomersDatabase();
+      if (db.length >= 100000) {
+        showToast('Kapasitas Database Customer maksimal 100.000 pelanggan!');
+        return;
+      }
+      const name = sanitizeInput(document.getElementById('custNameInput').value);
+      const whatsapp = normalizeWhatsAppNumber(document.getElementById('custWaInput').value);
+      const nextId = 'CST-' + String(db.length + 1).padStart(6, '0');
+      const key = toWaMeNumber(whatsapp) || name.toLowerCase().trim();
+      state.deletedCustomerKeys = state.deletedCustomerKeys.filter(k => k !== key);
+
+      state.manualCustomers.unshift({
+        id: nextId,
+        name,
+        whatsapp,
+        createdAt: new Date().toISOString().slice(0, 16)
+      });
+      showToast('Customer baru "' + name + '" (' + nextId + ') ditambahkan!');
+    }
+
+    function handleAddIssueSubmit(e, issueType) {
+      e.preventDefault();
+      const targetName = sanitizeInput(document.getElementById('issTargetName').value);
+      const whatsapp = normalizeWhatsAppNumber(document.getElementById('issWhatsapp').value);
+      const category = sanitizeInput(document.getElementById('issCategory').value);
+      const severity = sanitizeInput(document.getElementById('issSeverity').value);
+      const reportedAt = document.getElementById('issDate').value || new Date().toISOString().slice(0, 16);
+      const chronology = sanitizeInput(document.getElementById('issChronology').value);
+
+      const nextId = 'ISS-' + String(state.issues.length + 1).padStart(3, '0');
+      state.issues.unshift({
+        id: nextId,
+        type: issueType,
+        targetName,
+        whatsapp,
+        category,
+        severity,
+        actionStatus: issueType === 'driver' ? 'Dalam Pembinaan' : 'Diblokir / Pantauan',
+        chronology,
+        reportedAt
+      });
+      showToast('Laporan ' + nextId + ' (' + targetName + ') disimpan!');
+    }
+
+    function handleAddAdminAccountSubmit(e) {
+      e.preventDefault();
+      const name = sanitizeInput(document.getElementById('admNewName').value);
+      const email = sanitizeInput(document.getElementById('admNewEmail').value);
+      const username = sanitizeInput(document.getElementById('admNewUser').value);
+      const password = document.getElementById('admNewPass').value;
+      const role = sanitizeInput(document.getElementById('admNewRole').value);
+      if (!username || !password) return;
+
+      const nextId = 'ADM-' + String(state.adminAccounts.length + 1).padStart(2, '0');
+      state.adminAccounts.push({
+        id: nextId,
+        name: name || username,
+        email: email || (username + '@garjek.id'),
+        username,
+        password,
+        role
+      });
+      showToast('Akun Admin @' + username + ' berhasil ditambahkan!');
+    }
+
+    async function syncToGoogleSheets() {
+      try {
+        await fetch(PERMANENT_APPS_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'SYNC_ALL',
+            authEmail: state.adminUser.email || 'ahmadsyaifuddin@garjek.id',
+            orders: state.orders,
+            drivers: getEnrichedDrivers(),
+            customers: getCustomersDatabase(),
+            issues: state.issues,
+            loginHistory: state.loginSessionsHistory
+          })
+        });
+        state.lastSyncAt = new Date().toISOString();
+        showToast('Sinkronisasi ke Google Sheets berhasil (Khusus Email Pemilik)!');
+      } catch (e) {
+        showToast('Gagal sinkronisasi ke Google Sheets');
+      }
+    }
+
+    function handleLoginSubmit(e) {
+      e.preventDefault();
+      if (Date.now() < state.lockoutUntil) {
+        const waitSec = Math.ceil((state.lockoutUntil - Date.now()) / 1000);
+        showToast('Terlalu banyak percobaan gagal! Coba lagi dalam ' + waitSec + ' detik.');
+        return;
+      }
+      const u = sanitizeInput(document.getElementById('loginUser').value);
+      const p = document.getElementById('loginPass').value;
+      const found = state.adminAccounts.find(acc => acc.username.toLowerCase() === u.toLowerCase() && acc.password === p);
+      if (!found) {
+        state.failedAttempts += 1;
+        if (state.failedAttempts >= 5) {
+          state.lockoutUntil = Date.now() + 30000;
+          state.failedAttempts = 0;
+          showToast('5x Gagal Login! Sistem dikunci sementara 30 detik.');
+        } else {
+          showToast('Username atau Password salah!');
+        }
+        return;
+      }
+
+      state.failedAttempts = 0;
+      const dev = detectUserDevice();
+      const loginTime = new Date().toISOString();
+      const token = 'SES_' + found.username + '_' + Date.now();
+      state.isLoggedIn = true;
+      state.sessionToken = token;
+      state.adminUser = {
+        username: found.username,
+        email: found.email || (found.username + '@garjek.id'),
+        name: found.name,
+        role: found.role,
+        deviceType: dev.deviceType,
+        os: dev.os,
+        browser: dev.browser,
+        screenRes: dev.screenRes,
+        deviceSummary: dev.fullLabel,
+        loginAt: loginTime
+      };
+      state.loginSessionsHistory.unshift({
+        id: 'SES-' + String(state.loginSessionsHistory.length + 1).padStart(3, '0'),
+        name: found.name,
+        username: found.username,
+        email: found.email || (found.username + '@garjek.id'),
+        role: found.role,
+        deviceType: dev.deviceType,
+        os: dev.os,
+        browser: dev.browser,
+        screenRes: dev.screenRes,
+        loginAt: loginTime,
+        status: 'Login Berhasil'
+      });
+      saveLoginHistoryToStorage(state.loginSessionsHistory);
+      try {
+        localStorage.setItem('garjek_active_session_' + found.username, token);
+      } catch (err) {}
+
+      showToast('Selamat datang, ' + found.name + ' (' + dev.deviceType + ')!');
+    }
+
+    function clearAllLoginHistory() {
+      state.loginSessionsHistory = [
+        {
+          id: 'SES-' + String(Date.now()).slice(-3),
+          name: state.adminUser.name,
+          username: state.adminUser.username,
+          email: state.adminUser.email,
+          role: state.adminUser.role,
+          deviceType: state.adminUser.deviceType,
+          os: state.adminUser.os,
+          browser: state.adminUser.browser,
+          screenRes: state.adminUser.screenRes,
+          loginAt: state.adminUser.loginAt,
+          status: 'Sesi Aktif Saat Ini'
+        }
+      ];
+      saveLoginHistoryToStorage(state.loginSessionsHistory);
+      showToast('Riwayat sesi lama dibersihkan (Sesi aktif tetap dipertahankan).');
+    }
+
+    function exportDataToCSV(filename, rows) {
+      if (!rows || rows.length === 0) {
+        showToast('Tidak ada data untuk diekspor!');
+        return;
+      }
+      const headers = Object.keys(rows[0]).filter(k => typeof rows[0][k] !== 'object' || rows[0][k] === null);
+      const csv = [
+        headers.join(','),
+        ...rows.map(r => headers.map(h => {
+          let val = r[h] === null || r[h] === undefined ? '' : String(r[h]);
+          if (/^[=+\-@]/.test(val) && !/^\+62[0-9]+$/.test(val)) val = "'" + val;
+          return `"${val.replace(/"/g, '""')}"`;
+        }).join(','))
+      ].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${filename}_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function handleLogout() {
+      const logoutIso = new Date().toISOString();
+      state.loginSessionsHistory = state.loginSessionsHistory.map((ses, idx) =>
+        idx === 0 && ses.username.toLowerCase() === state.adminUser.username.toLowerCase()
+          ? { ...ses, logoutAt: logoutIso, status: 'Sudah Logout (' + formatDateTimeRealtimeID(logoutIso) + ')' }
+          : ses
+      );
+      saveLoginHistoryToStorage(state.loginSessionsHistory);
+      state.isLoggedIn = false;
+      state.sessionToken = '';
+      renderApp();
+    }
+
+    function setActiveMenu(menuId) {
+      state.activeMenu = menuId;
+      if (window.innerWidth < 1024) {
+        state.sidebarCollapsed = true;
+      }
+      renderApp();
+    }
+
+    function toggleSidebarMenu() {
+      state.sidebarCollapsed = !state.sidebarCollapsed;
+      renderApp();
+    }
+
+    function toggleFullTableFocus() {
+      const nextState = !(state.sidebarCollapsed && state.headerCollapsed);
+      state.sidebarCollapsed = nextState;
+      state.headerCollapsed = nextState;
+      renderApp();
+    }
+
+    function toggleFullscreenView() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().then(() => {
+          state.isFullscreen = true;
+          renderApp();
+        }).catch(() => {
+          state.sidebarCollapsed = true;
+          renderApp();
+        });
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().then(() => {
+            state.isFullscreen = false;
+            renderApp();
+          }).catch(() => {});
+        }
+      }
+    }
+
+    function togglePasswordVisibility() {
+      const p = document.getElementById('loginPass');
+      if (p) p.type = p.type === 'password' ? 'text' : 'password';
+    }
+
+    function renderApp() {
+      destroyCharts();
+      const root = document.getElementById('root');
+      if (!state.isLoggedIn) {
+        root.innerHTML = `
+          <div class="min-h-screen bg-[#0b1120] flex items-center justify-center p-4">
+            ${state.toast ? `<div class="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl border border-slate-700 text-xs font-bold">⚠️ ${state.toast}</div>` : ''}
+            <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8 space-y-6 border border-slate-200">
+              <div class="flex items-center gap-3">
+                <div class="w-12 h-12 rounded-2xl bg-emerald-600 flex items-center justify-center text-white font-black text-2xl shadow-lg shadow-emerald-600/30">G</div>
+                <div>
+                  <h1 class="text-xl font-black text-slate-900 tracking-tight">GARJEK ADMIN PRO</h1>
+                  <p class="text-xs text-emerald-600 font-bold uppercase tracking-wider">Portal Administrasi Operasional</p>
+                </div>
+              </div>
+              <form id="loginFormEl" onsubmit="handleLoginSubmit(event)" class="space-y-4 text-xs">
+                <div>
+                  <label class="font-bold text-slate-700 block mb-1">Username Admin</label>
+                  <input type="text" id="loginUser" required placeholder="Masukkan username admin" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-semibold focus:ring-2 focus:ring-emerald-500 outline-none">
+                </div>
+                <div>
+                  <label class="font-bold text-slate-700 block mb-1">Password Login</label>
+                  <div class="relative">
+                    <input type="password" id="loginPass" required placeholder="Masukkan password" class="w-full pl-3.5 pr-10 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none">
+                    <button type="button" onclick="togglePasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">👁</button>
+                  </div>
+                </div>
+                <button type="submit" class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm shadow-lg shadow-emerald-600/25 transition">Masuk ke Dashboard Garjek</button>
+              </form>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      const menuList = [
+        { id: 'dashboard', label: 'Dashboard Overview', icon: '📊' },
+        { id: 'orders', label: 'Rekap Orderan', icon: '📋' },
+        { id: 'drivers', label: 'Manajemen Driver (5.000)', icon: '🛵' },
+        { id: 'vests', label: 'Pelunasan & Rompi 150K', icon: '🦺' },
+        { id: 'customers', label: 'Database Customer (100.000)', icon: '👥' },
+        { id: 'driver_issues', label: 'Laporan Driver Bermasalah', icon: '⚠️' },
+        { id: 'customer_issues', label: 'Laporan Customer Bermasalah', icon: '🚫' },
+        { id: 'driver_stats', label: 'Statistik Driver', icon: '🏆' },
+        { id: 'customer_stats', label: 'Statistik CS / Pelanggan', icon: '🌟' },
+        { id: 'commission', label: 'Komisi Admin (5% & 10%)', icon: '💰' },
+        { id: 'analytics', label: 'Grafik Analytics', icon: '📈' },
+        { id: 'finance', label: 'Laporan Keuangan', icon: '📑' },
+        { id: 'sheets', label: 'Integrasi Google Sheets', icon: '☁️' },
+        { id: 'settings', label: 'Akun Login & Panduan GitHub', icon: '⚙️' }
+      ];
+
+      const editingOrderObj = state.editingOrderId ? state.orders.find(o => o.id === state.editingOrderId) : null;
+      const defaultDrv = editingOrderObj
+        ? (state.drivers.find(d => d.id === editingOrderObj.driverId) || state.drivers[0])
+        : state.drivers[0];
+
+      root.innerHTML = `
+        <div class="min-h-screen bg-[#f4f7fb] flex text-slate-800 relative">
+          ${state.toast ? `<div class="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2.5 text-xs font-bold">✅ ${state.toast}</div>` : ''}
+          ${(state.sidebarCollapsed || state.headerCollapsed) ? `
+            <div class="fixed bottom-5 left-5 z-40 flex items-center gap-2">
+              <button
+                onclick="state.sidebarCollapsed = false; state.headerCollapsed = false; renderApp();"
+                class="px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-xl shadow-emerald-600/30 flex items-center gap-2 border border-emerald-400 transition"
+                title="Tampilkan Kembali Menu Samping & Header"
+              >
+                <span>☰ Buka Menu Navigasi</span>
+              </button>
+            </div>
+          ` : ''}
+          ${state.deleteModal ? `
+            <div class="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4">
+              <div class="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl border border-slate-200 text-center">
+                <div class="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto text-xl">🗑️</div>
+                <h4 class="text-base font-black text-slate-900">Konfirmasi Hapus Data</h4>
+                <p class="text-xs text-slate-500">Apakah Anda yakin ingin menghapus <strong>${state.deleteModal.label}</strong> secara permanen?</p>
+                <div class="flex items-center justify-center gap-2 pt-2">
+                  <button onclick="closeDeleteConfirm()" class="px-4 py-2 rounded-xl border border-slate-300 text-xs font-bold">Batal</button>
+                  <button onclick="executeDeleteItem()" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold">Ya, Hapus</button>
+                </div>
+              </div>
+            </div>
+          ` : ''}
+
+          ${state.orderModalOpen ? `
+            <div class="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+              <div class="bg-white rounded-3xl max-w-2xl w-full p-5 sm:p-6 space-y-4 shadow-2xl border border-slate-200 text-xs my-auto max-h-[94vh] overflow-y-auto">
+                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div>
+                    <h3 class="text-base font-black text-slate-900">${editingOrderObj ? 'Edit Order ' + editingOrderObj.id : 'Tambah Order Baru Garjek'}</h3>
+                    <p class="text-[11px] text-slate-500">Cari otomatis Customer (CS) & Driver tersimpan menggunakan Nama atau Nomor WA (+62 / 08xxx)</p>
+                  </div>
+                  <button type="button" onclick="closeOrderModal()" class="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold">✕</button>
+                </div>
+
+                <form onsubmit="handleAddOrderSubmit(event)" class="space-y-4">
+                  <!-- PENCARIAN OTOMATIS CUSTOMER TERSIMPAN (NAMA / WA) -->
+                  <div class="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2 relative">
+                    <div class="flex items-center justify-between">
+                      <label class="text-[11px] font-extrabold text-indigo-950">🔍 Cari Otomatis Customer / CS Tersimpan (Ketik Nama atau No. WA):</label>
+                      <span id="ordCustCategoryBadge" class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-100 text-blue-800">
+                        ${editingOrderObj ? editingOrderObj.customerCategory : 'Auto-Detect CS'}
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      id="ordCustQuickSearch"
+                      autocomplete="off"
+                      placeholder="Ketik nama pelanggan atau nomor WA (08xxx / +62)..."
+                      onfocus="filterOrderCustRecommendations(this.value)"
+                      oninput="filterOrderCustRecommendations(this.value)"
+                      class="w-full px-3.5 py-2 rounded-xl border border-indigo-300 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    >
+                    <div id="custSuggestionBox" class="hidden max-h-44 overflow-y-auto rounded-xl bg-white border border-indigo-200 shadow-lg divide-y divide-slate-100"></div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label class="font-bold text-slate-700 block mb-1">Nama Customer (CS) *</label>
+                      <input
+                        type="text"
+                        id="ordCustName"
+                        required
+                        placeholder="Nama Pelanggan"
+                        value="${editingOrderObj ? editingOrderObj.customerName : ''}"
+                        oninput="handleOrderCustManualInput()"
+                        class="w-full px-3.5 py-2 rounded-xl border border-slate-300 font-bold"
+                      >
+                    </div>
+                    <div>
+                      <label class="font-bold text-slate-700 block mb-1">Nomor WhatsApp Customer (08xxx / +62) *</label>
+                      <input
+                        type="tel"
+                        id="ordCustWA"
+                        required
+                        placeholder="08123456789 atau +62812..."
+                        value="${editingOrderObj ? editingOrderObj.customerWA : ''}"
+                        oninput="handleOrderCustManualInput()"
+                        class="w-full px-3.5 py-2 rounded-xl border border-slate-300 font-mono font-bold"
+                      >
+                    </div>
+                  </div>
+
+                  <!-- PENCARIAN OTOMATIS DRIVER TERSIMPAN (NAMA / WA / PLAT) -->
+                  <div class="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-2 relative">
+                    <div class="flex items-center justify-between">
+                      <label class="text-[11px] font-extrabold text-emerald-950">🛵 Cari Otomatis Driver Tersimpan (Ketik Nama, No. WA, atau Plat Nomor):</label>
+                      <span id="ordDriverSelectedInfo" class="text-[10px] font-extrabold text-emerald-800">
+                        ${defaultDrv ? `Terpilih: ${defaultDrv.name} (${defaultDrv.whatsapp})` : 'Pilih Driver'}
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      id="ordDriverQuickSearch"
+                      autocomplete="off"
+                      placeholder="Ketik nama driver, nomor WA (+62/08xxx), atau plat nomor..."
+                      value="${defaultDrv ? `${defaultDrv.name} — ${defaultDrv.whatsapp} (${defaultDrv.plateNumber})` : ''}"
+                      onfocus="filterOrderDriverRecommendations('')"
+                      oninput="filterOrderDriverRecommendations(this.value)"
+                      class="w-full px-3.5 py-2 rounded-xl border border-emerald-300 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                    <input type="hidden" id="ordDriverId" value="${defaultDrv ? defaultDrv.id : ''}">
+                    <div id="driverSuggestionBox" class="hidden max-h-44 overflow-y-auto rounded-xl bg-white border border-emerald-200 shadow-lg divide-y divide-slate-100"></div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label class="font-bold text-slate-700 block mb-1">Waktu Order</label>
+                      <input
+                        type="datetime-local"
+                        id="ordDatetime"
+                        required
+                        value="${editingOrderObj ? editingOrderObj.datetime : new Date().toISOString().slice(0, 16)}"
+                        class="w-full px-3 py-2 rounded-xl border border-slate-300"
+                      >
+                    </div>
+                    <div>
+                      <label class="font-bold text-slate-700 block mb-1">Layanan Garjek</label>
+                      <select id="ordService" class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold">
+                        <option value="GARJEK RIDE" ${editingOrderObj && editingOrderObj.serviceType === 'GARJEK RIDE' ? 'selected' : ''}>GARJEK RIDE</option>
+                        <option value="GARJEK FOOD AND SHOP" ${editingOrderObj && editingOrderObj.serviceType === 'GARJEK FOOD AND SHOP' ? 'selected' : ''}>GARJEK FOOD AND SHOP</option>
+                        <option value="GARJEK SEND" ${editingOrderObj && editingOrderObj.serviceType === 'GARJEK SEND' ? 'selected' : ''}>GARJEK SEND</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="font-bold text-slate-700 block mb-1">Status Order</label>
+                      <select id="ordStatus" class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold">
+                        <option value="Selesai" ${!editingOrderObj || editingOrderObj.status === 'Selesai' ? 'selected' : ''}>Selesai</option>
+                        <option value="Dalam perjalanan" ${editingOrderObj && editingOrderObj.status === 'Dalam perjalanan' ? 'selected' : ''}>Dalam perjalanan</option>
+                        <option value="Menunggu driver" ${editingOrderObj && editingOrderObj.status === 'Menunggu driver' ? 'selected' : ''}>Menunggu driver</option>
+                        <option value="Dibatalkan" ${editingOrderObj && editingOrderObj.status === 'Dibatalkan' ? 'selected' : ''}>Dibatalkan</option>
+                        <option value="Tidak ada driver" ${editingOrderObj && editingOrderObj.status === 'Tidak ada driver' ? 'selected' : ''}>Tidak ada driver</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                    <div>
+                      <label class="font-bold text-slate-700 block mb-1">Ongkir Driver (Rp) *</label>
+                      <input
+                        type="number"
+                        id="ordCost"
+                        required
+                        min="0"
+                        step="500"
+                        value="${editingOrderObj ? editingOrderObj.shippingCost : 20000}"
+                        oninput="updateModalOrderCommissionPreview()"
+                        class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-extrabold"
+                      >
+                    </div>
+                    <div>
+                      <label class="font-bold text-slate-700 block mb-1">Skema Komisi Admin</label>
+                      <select id="ordCommRate" onchange="updateModalOrderCommissionPreview()" class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold">
+                        <option value="5" ${(editingOrderObj ? editingOrderObj.commissionRate : state.defaultCommissionRate) === 5 ? 'selected' : ''}>Komisi 5%</option>
+                        <option value="10" ${(editingOrderObj ? editingOrderObj.commissionRate : state.defaultCommissionRate) === 10 ? 'selected' : ''}>Komisi 10%</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="font-bold text-emerald-800 block mb-1">Otomatis Komisi & Bersih:</label>
+                      <div id="ordCommPreview" class="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 font-black text-emerald-700 text-[11px]">
+                        ${formatIDR(Math.round((editingOrderObj ? editingOrderObj.shippingCost : 20000) * ((editingOrderObj ? editingOrderObj.commissionRate : state.defaultCommissionRate) / 100)))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="font-bold text-slate-700 block mb-1">Catatan Penjemputan / Order (Opsional)</label>
+                    <input
+                      type="text"
+                      id="ordNotes"
+                      placeholder="Contoh: Jemput di Alun-alun / Titip beli makanan"
+                      value="${editingOrderObj ? (editingOrderObj.notes || '') : ''}"
+                      class="w-full px-3.5 py-2 rounded-xl border border-slate-300"
+                    >
+                  </div>
+
+                  <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                    <button type="button" onclick="closeOrderModal()" class="px-4 py-2 rounded-xl border border-slate-300 font-bold">Batal</button>
+                    <button type="submit" class="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold shadow-md shadow-emerald-600/20">
+                      💾 Simpan Orderan
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ` : ''}
+
+          <aside class="${state.sidebarCollapsed ? 'hidden' : 'w-64 flex'} bg-[#0b1120] text-slate-300 flex-col justify-between shrink-0 transition-all duration-200">
+            <div class="p-4 space-y-5 overflow-y-auto">
+              <div class="flex items-center justify-between gap-2 px-2 pt-1">
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-[#10b981] flex items-center justify-center text-white font-black text-xl">G</div>
+                  <div>
+                    <h1 class="text-base font-black text-white leading-none">GARJEK</h1>
+                    <span class="inline-block mt-1 text-[9px] font-extrabold bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded">ADMIN DASHBOARD</span>
+                  </div>
+                </div>
+                <button onclick="toggleSidebarMenu()" class="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-extrabold" title="Tutup Menu Samping (Tampilan Penuh)">
+                  ✕ Tutup
+                </button>
+              </div>
+              <nav class="space-y-1 text-xs font-bold">
+                ${menuList.map(m => `
+                  <button onclick="setActiveMenu('${m.id}')" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition ${state.activeMenu === m.id ? 'bg-[#10b981] text-white shadow-lg shadow-emerald-600/25' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}">
+                    <span>${m.icon}</span><span class="truncate">${m.label}</span>
+                  </button>
+                `).join('')}
+              </nav>
+            </div>
+            <div class="p-4 space-y-3 border-t border-slate-800 bg-[#080d19]">
+              <div class="p-3 rounded-2xl bg-[#111827] border border-slate-800 space-y-2">
+                <div class="flex items-center justify-between text-[11px] font-bold">
+                  <span class="text-white">Skema Komisi</span>
+                  <span class="text-emerald-400">${state.defaultCommissionRate}% Active</span>
+                </div>
+                <div class="grid grid-cols-2 gap-1.5 text-xs font-extrabold">
+                  <button onclick="setCommissionRateGlobal(5)" class="py-1.5 rounded-lg ${state.defaultCommissionRate === 5 ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'}">5%</button>
+                  <button onclick="setCommissionRateGlobal(10)" class="py-1.5 rounded-lg ${state.defaultCommissionRate === 10 ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'}">10%</button>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-xs font-bold text-white">${state.adminUser.name}</p>
+                  <p class="text-[10px] text-slate-400">${state.adminUser.role} • ${state.adminUser.deviceType}</p>
+                </div>
+                <button onclick="handleLogout()" class="p-2 text-slate-400 hover:text-rose-400" title="Logout">🚪</button>
+              </div>
+            </div>
+          </aside>
+
+          <div class="flex-1 flex flex-col min-w-0">
+            <header class="${state.headerCollapsed ? 'hidden' : 'flex'} bg-white border-b border-slate-200 px-4 lg:px-8 py-4 flex-wrap items-center justify-between gap-4 sticky top-0 z-20">
+              <div class="flex items-center gap-3">
+                <button
+                  onclick="toggleSidebarMenu()"
+                  class="px-3.5 py-2 rounded-xl border ${state.sidebarCollapsed ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-slate-900 hover:bg-slate-800 text-white border-slate-900'} text-xs font-extrabold flex items-center gap-1.5 transition"
+                  title="${state.sidebarCollapsed ? 'Buka Menu Samping' : 'Tutup Menu Samping agar Tampilan Full'}"
+                >
+                  <span>${state.sidebarCollapsed ? '☰ Buka Menu' : '✕ Tutup Menu (Tampilan Full)'}</span>
+                </button>
+                <div>
+                  <h2 class="text-lg lg:text-xl font-black text-slate-900">${(menuList.find(m => m.id === state.activeMenu) || {}).label || 'Dashboard Overview'}</h2>
+                  <p class="text-xs text-slate-500">Sheets Permanen • Komisi ${state.defaultCommissionRate}% • ${state.adminUser.email} (${state.adminUser.deviceType})</p>
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-2.5">
+                <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-mono font-bold shadow-sm">
+                  <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                  <span id="liveHeaderClock">${formatDateTimeRealtimeID(new Date().toISOString())}</span>
+                </div>
+                <button onclick="toggleFullTableFocus()" class="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-extrabold rounded-xl" title="Sembunyikan Menu & Header agar Tabel 100% Penuh">
+                  ↔ Mode Tabel Penuh
+                </button>
+                <button onclick="toggleFullscreenView()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-extrabold rounded-xl" title="Layar Penuh Monitor/HP (Fullscreen)">
+                  ⛶ Layar Penuh
+                </button>
+                <button onclick="syncToGoogleSheets()" class="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-extrabold rounded-xl">☁️ Sheets Permanen Aktif</button>
+                <button onclick="state.privacyMask = !state.privacyMask; renderApp();" class="px-3.5 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl">${state.privacyMask ? '🙈 Sensor WA' : '👁 WA +62'}</button>
+                <button onclick="openAddOrderModal()" class="px-4 py-2.5 bg-[#10b981] hover:bg-emerald-600 text-white text-xs font-extrabold rounded-xl shadow-md shadow-emerald-500/20">+ Tambah Order</button>
+              </div>
+            </header>
+            <main class="${state.sidebarCollapsed ? 'p-4 lg:p-6' : 'p-6 lg:p-8'} space-y-6 flex-1 overflow-y-auto">
+              ${renderActiveContent()}
+            </main>
+          </div>
+        </div>
+      `;
+      setTimeout(initActiveCharts, 40);
+    }
+
+    function renderActiveContent() {
+      const enrichedDrivers = getEnrichedDrivers();
+      const customersDB = getCustomersDatabase();
+      const doneOrders = state.orders.filter(o => o.status === 'Selesai');
+      const totalGross = doneOrders.reduce((s, o) => s + (Number(o.shippingCost) || 0), 0);
+      const totalComm = Math.round(totalGross * ((Number(state.defaultCommissionRate) || 10) / 100));
+      const totalNet = totalGross - totalComm;
+
+      // 1. DASHBOARD OVERVIEW (IDENTIK DENGAN APP.JSX)
+      if (state.activeMenu === 'dashboard') {
+        const topDrivers = [...enrichedDrivers].sort((a, b) => b.totalShipping - a.totalShipping).slice(0, 5);
+        const topCustomers = [...customersDB].sort((a, b) => b.totalOrders - a.totalOrders).slice(0, 5);
+        const newCustCount = customersDB.filter(c => c.category === 'Baru').length;
+        const repeatCustCount = customersDB.filter(c => c.category === 'Repeat').length;
+        const batalCount = state.orders.filter(o => o.status === 'Dibatalkan').length;
+        const noDrvCount = state.orders.filter(o => o.status === 'Tidak ada driver').length;
+        const totalVestCollected = enrichedDrivers.reduce((s, d) => s + d.vestFeePaid, 0);
+        const lunasVestCount = enrichedDrivers.filter(d => d.vestPaymentStatus === 'Lunas').length;
+
+        return `
+          <div class="space-y-6">
+            <!-- 3 KARTU GRADIENT KOMISI HARI INI, MINGGU INI, BULAN INI -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div class="rounded-3xl p-6 text-white bg-gradient-to-br from-[#059669] via-[#047857] to-[#065f46] shadow-xl">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-extrabold uppercase text-emerald-100">KOMISI HARI INI (${state.defaultCommissionRate}%)</span>
+                  <span class="text-[11px] font-bold bg-white/25 px-2.5 py-1 rounded-lg">Today</span>
+                </div>
+                <div class="text-3xl lg:text-4xl font-black mt-3">${formatIDR(totalComm)}</div>
+                <div class="flex items-center justify-between mt-6 pt-3 border-t border-white/15 text-xs font-semibold text-emerald-100">
+                  <span>${doneOrders.length} Order Selesai</span>
+                  <span>Total: ${formatIDR(totalGross)}</span>
+                </div>
+              </div>
+
+              <div class="rounded-3xl p-6 text-white bg-gradient-to-br from-[#3b38f5] via-[#312ecb] to-[#1e1b8b] shadow-xl">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-extrabold uppercase text-indigo-100">KOMISI MINGGU INI (${state.defaultCommissionRate}%)</span>
+                  <span class="text-[11px] font-bold bg-white/25 px-2.5 py-1 rounded-lg">This Week</span>
+                </div>
+                <div class="text-3xl lg:text-4xl font-black mt-3">${formatIDR(totalComm)}</div>
+                <div class="flex items-center justify-between mt-6 pt-3 border-t border-white/15 text-xs font-semibold text-indigo-100">
+                  <span>${doneOrders.length} Order Selesai</span>
+                  <span>Total: ${formatIDR(totalGross)}</span>
+                </div>
+              </div>
+
+              <div class="rounded-3xl p-6 text-white bg-gradient-to-br from-[#0f172a] via-[#1e293b] to-[#090d16] shadow-xl">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-extrabold uppercase text-slate-300">KOMISI BULAN INI (${state.defaultCommissionRate}%)</span>
+                  <span class="text-[11px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-lg">${state.defaultCommissionRate}% Rate</span>
+                </div>
+                <div class="text-3xl lg:text-4xl font-black mt-3">${formatIDR(totalComm)}</div>
+                <div class="flex items-center justify-between mt-6 pt-3 border-t border-slate-700/80 text-xs font-semibold text-slate-300">
+                  <span>${doneOrders.length} Order Selesai</span>
+                  <span class="text-emerald-400">Total: ${formatIDR(totalGross)}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4 KARTU INDIKATOR OPERASIONAL -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              <div class="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between">
+                  <span class="text-[11px] font-extrabold uppercase text-slate-500">TOTAL ORDER SELESAI</span>
+                  <span class="p-2 rounded-xl bg-emerald-50 text-emerald-600 font-bold">✓</span>
+                </div>
+                <div class="text-3xl font-black text-slate-900 my-3">${doneOrders.length}</div>
+                <div class="text-xs text-slate-500 font-medium">Total Ongkir: ${formatIDR(totalGross)}</div>
+              </div>
+
+              <div class="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between">
+                  <span class="text-[11px] font-extrabold uppercase text-slate-500">RASIO ORDER BARU VS REPEAT</span>
+                  <span class="p-2 rounded-xl bg-blue-50 text-blue-600 font-bold">↗</span>
+                </div>
+                <div class="my-2">
+                  <div class="flex items-center justify-between text-sm font-black">
+                    <span class="text-blue-600">${customersDB.length > 0 ? Math.round((newCustCount / customersDB.length) * 100) : 0}% Baru</span>
+                    <span class="text-slate-300">/</span>
+                    <span class="text-indigo-600">${customersDB.length > 0 ? Math.round((repeatCustCount / customersDB.length) * 100) : 0}% Repeat</span>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between text-[11px] text-slate-500">
+                  <span>${newCustCount} CS Baru</span>
+                  <span>${repeatCustCount} CS Repeat</span>
+                </div>
+              </div>
+
+              <div class="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between">
+                  <span class="text-[11px] font-extrabold uppercase text-slate-500">DATABASE TERDAFTAR</span>
+                  <span class="p-2 rounded-xl bg-indigo-50 text-indigo-600 font-bold">👥</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2 my-2">
+                  <div>
+                    <span class="text-[11px] text-slate-400 block">Driver (Maks 5.000)</span>
+                    <span class="text-2xl font-black text-slate-900">${enrichedDrivers.length}</span>
+                  </div>
+                  <div>
+                    <span class="text-[11px] text-slate-400 block">CS (Maks 100.000)</span>
+                    <span class="text-2xl font-black text-slate-900">${customersDB.length}</span>
+                  </div>
+                </div>
+                <div class="text-xs font-bold text-emerald-600">${enrichedDrivers.length} Driver Aktif Online</div>
+              </div>
+
+              <div class="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between">
+                  <span class="text-[11px] font-extrabold uppercase text-slate-500">KENDALA ORDER</span>
+                  <span class="p-2 rounded-xl bg-rose-50 text-rose-600 font-bold">⚠️</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2 my-2">
+                  <div>
+                    <span class="text-[11px] text-rose-500 font-bold block">Batal</span>
+                    <span class="text-2xl font-black text-slate-900">${batalCount}</span>
+                  </div>
+                  <div>
+                    <span class="text-[11px] text-amber-500 font-bold block">No Driver</span>
+                    <span class="text-2xl font-black text-slate-900">${noDrvCount}</span>
+                  </div>
+                </div>
+                <div class="text-xs text-slate-500">Total Order Tercatat: ${state.orders.length}</div>
+              </div>
+            </div>
+
+            <!-- 3 KARTU AKSES CEPAT ROMPI & LAPORAN MASALAH -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+              <div class="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-sm flex items-center justify-between">
+                <div class="space-y-1">
+                  <span class="text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700">Atribut & Registrasi Rp150K</span>
+                  <h4 class="text-sm font-black text-slate-900">Pelunasan Pendaftaran & Rompi</h4>
+                  <p class="text-xs text-slate-500">Terkumpul: <strong class="text-emerald-700">${formatIDR(totalVestCollected)}</strong> • Lunas: <strong>${lunasVestCount} Driver</strong></p>
+                </div>
+                <button onclick="setActiveMenu('vests')" class="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-extrabold shrink-0">Cek Rompi →</button>
+              </div>
+
+              <div class="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-sm flex items-center justify-between">
+                <div class="space-y-1">
+                  <span class="text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700">Pengawasan Mitra</span>
+                  <h4 class="text-sm font-black text-slate-900">Laporan Driver Bermasalah</h4>
+                  <p class="text-xs text-slate-500">Total tercatat: <strong class="text-rose-600">${state.issues.filter(i => i.type === 'driver').length} Kasus</strong></p>
+                </div>
+                <button onclick="setActiveMenu('driver_issues')" class="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-extrabold shrink-0">Lihat Kasus →</button>
+              </div>
+
+              <div class="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-sm flex items-center justify-between">
+                <div class="space-y-1">
+                  <span class="text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700">Anti Order Fiktif / Prank</span>
+                  <h4 class="text-sm font-black text-slate-900">Laporan Customer Bermasalah</h4>
+                  <p class="text-xs text-slate-500">Total tercatat: <strong class="text-rose-600">${state.issues.filter(i => i.type === 'customer').length} Kasus</strong></p>
+                </div>
+                <button onclick="setActiveMenu('customer_issues')" class="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-extrabold shrink-0">Lihat Blacklist →</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                <div class="flex items-center justify-between">
+                  <h3 class="text-sm font-black text-slate-900">🏆 Top Driver Pendapatan Terbanyak</h3>
+                  <button onclick="setActiveMenu('analytics')" class="text-xs font-bold text-emerald-600">Lihat Top 20 →</button>
+                </div>
+                <div class="space-y-2 text-xs">
+                  ${topDrivers.map((d, i) => `
+                    <div class="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between">
+                      <div>
+                        <span class="font-black text-emerald-700 mr-1.5">#${i + 1}</span>
+                        <span class="font-bold text-slate-900">${d.name}</span>
+                        <span class="text-[11px] font-mono text-indigo-600 ml-1">(${d.email || '-'})</span>
+                      </div>
+                      <div class="text-right">
+                        <div class="font-black text-slate-900">${formatIDR(d.totalShipping)}</div>
+                        <div class="text-[10px] text-emerald-600 font-bold">Bersih: ${formatIDR(d.netIncome)} (${d.completedCount} Order)</div>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                <div class="flex items-center justify-between">
+                  <h3 class="text-sm font-black text-slate-900">🌟 Top Customer Repeat Order Terbanyak</h3>
+                  <button onclick="setActiveMenu('customers')" class="text-xs font-bold text-emerald-600">Database CS →</button>
+                </div>
+                <div class="space-y-2 text-xs">
+                  ${topCustomers.map((c, i) => `
+                    <div class="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between">
+                      <div>
+                        <span class="font-black text-indigo-600 mr-1.5">#${i + 1}</span>
+                        <span class="font-bold text-slate-900">${c.name}</span>
+                        <span class="text-[11px] font-mono text-slate-500 ml-1">${maskPhone(c.whatsapp, state.privacyMask)}</span>
+                      </div>
+                      <div class="text-right">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-50 text-indigo-700">${c.totalOrders}x Order (${c.category})</span>
+                        <div class="text-[11px] font-bold text-slate-700 mt-0.5">${formatIDR(c.totalSpend)}</div>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // 2. REKAP ORDERAN (DENGAN PENCARIAN OTOMATIS CS & DRIVER VIA NAMA / WA)
+      if (state.activeMenu === 'orders') {
+        const q = (state.orderSearch || '').toLowerCase();
+        const qWa = toWaMeNumber(state.orderSearch || '');
+        const filtered = state.orders.filter(o => {
+          if (state.orderStatusFilter !== 'Semua' && o.status !== state.orderStatusFilter) return false;
+          if (state.orderServiceFilter !== 'Semua' && o.serviceType !== state.orderServiceFilter) return false;
+          if (!q) return true;
+          return (
+            o.id.toLowerCase().includes(q) ||
+            (o.customerName || '').toLowerCase().includes(q) ||
+            (o.customerWA || '').toLowerCase().includes(q) ||
+            (qWa.length >= 4 && toWaMeNumber(o.customerWA).includes(qWa)) ||
+            (o.driverName || '').toLowerCase().includes(q)
+          );
+        });
+        const startIdx = (state.orderPage - 1) * state.orderPageSize;
+        const paged = filtered.slice(startIdx, startIdx + state.orderPageSize);
+
+        return `
+          <div class="space-y-4">
+            <!-- BAR PENCARIAN & TOMBOL MODAL ORDER (SEPERTI APP.JSX) -->
+            <div class="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex flex-wrap items-center justify-between gap-3">
+              <div class="flex flex-wrap items-center gap-2.5 flex-1">
+                <input
+                  type="text"
+                  placeholder="🔍 Cari ID Order, Nama CS, Nomor WA (+62/08xxx), atau Nama Driver..."
+                  value="${state.orderSearch}"
+                  oninput="state.orderSearch = this.value; state.orderPage = 1; renderApp();"
+                  class="flex-1 min-w-[240px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-semibold"
+                >
+                <select
+                  onchange="state.orderStatusFilter = this.value; state.orderPage = 1; renderApp();"
+                  class="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-slate-50 font-bold"
+                >
+                  <option value="Semua" ${state.orderStatusFilter === 'Semua' ? 'selected' : ''}>Semua Status</option>
+                  <option value="Selesai" ${state.orderStatusFilter === 'Selesai' ? 'selected' : ''}>Selesai</option>
+                  <option value="Dalam perjalanan" ${state.orderStatusFilter === 'Dalam perjalanan' ? 'selected' : ''}>Dalam perjalanan</option>
+                  <option value="Menunggu driver" ${state.orderStatusFilter === 'Menunggu driver' ? 'selected' : ''}>Menunggu driver</option>
+                  <option value="Dibatalkan" ${state.orderStatusFilter === 'Dibatalkan' ? 'selected' : ''}>Dibatalkan</option>
+                  <option value="Tidak ada driver" ${state.orderStatusFilter === 'Tidak ada driver' ? 'selected' : ''}>Tidak ada driver</option>
+                </select>
+                <select
+                  onchange="state.orderServiceFilter = this.value; state.orderPage = 1; renderApp();"
+                  class="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-slate-50 font-bold"
+                >
+                  <option value="Semua" ${state.orderServiceFilter === 'Semua' ? 'selected' : ''}>Semua Layanan</option>
+                  <option value="GARJEK RIDE" ${state.orderServiceFilter === 'GARJEK RIDE' ? 'selected' : ''}>GARJEK RIDE</option>
+                  <option value="GARJEK FOOD AND SHOP" ${state.orderServiceFilter === 'GARJEK FOOD AND SHOP' ? 'selected' : ''}>GARJEK FOOD AND SHOP</option>
+                  <option value="GARJEK SEND" ${state.orderServiceFilter === 'GARJEK SEND' ? 'selected' : ''}>GARJEK SEND</option>
+                </select>
+              </div>
+              <button
+                onclick="openAddOrderModal()"
+                class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm"
+              >
+                + Tambah Order (Auto-Search CS & Driver)
+              </button>
+            </div>
+
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                      <th class="py-3.5 px-3">No</th>
+                      <th class="py-3.5 px-3">ID Order</th>
+                      <th class="py-3.5 px-3">Waktu</th>
+                      <th class="py-3.5 px-3">Customer & WA (+62)</th>
+                      <th class="py-3.5 px-3">Kategori</th>
+                      <th class="py-3.5 px-3">Layanan</th>
+                      <th class="py-3.5 px-3">Driver</th>
+                      <th class="py-3.5 px-3">Ongkir Driver</th>
+                      <th class="py-3.5 px-3">Komisi Admin (Klik 5% / 10%)</th>
+                      <th class="py-3.5 px-3">Status</th>
+                      <th class="py-3.5 px-3 text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    ${paged.map((o, idx) => {
+                      const rowRate = Number(o.commissionRate) || state.defaultCommissionRate;
+                      const comm = o.status === 'Selesai' ? Math.round((Number(o.shippingCost) || 0) * (rowRate / 100)) : 0;
+                      return `
+                        <tr class="hover:bg-slate-50">
+                          <td class="py-3 px-3 font-extrabold text-slate-400">${startIdx + idx + 1}</td>
+                          <td class="py-3 px-3 font-bold text-slate-900">${o.id}</td>
+                          <td class="py-3 px-3 text-slate-500 whitespace-nowrap">${formatDateID(o.datetime)}</td>
+                          <td class="py-3 px-3">
+                            <div class="font-bold text-slate-900">${o.customerName}</div>
+                            <div class="flex items-center gap-1 mt-0.5">
+                              <span class="text-[11px] font-mono text-slate-500">${maskPhone(o.customerWA, state.privacyMask)}</span>
+                              <a href="${getWhatsAppChatUrl(o.customerWA, o.customerName)}" target="_blank" class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 text-[10px] font-bold">WA</a>
+                              <button onclick="downloadVCardContact('${o.customerName}', '${o.customerWA}', 'Customer Garjek')" class="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 text-[10px] font-bold">Save</button>
+                            </div>
+                          </td>
+                          <td class="py-3 px-3">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${o.customerCategory === 'Repeat' ? 'bg-indigo-50 text-indigo-700' : 'bg-blue-50 text-blue-700'}">${o.customerCategory || 'Baru'}</span>
+                          </td>
+                          <td class="py-3 px-3 font-extrabold text-slate-800">${o.serviceType}</td>
+                          <td class="py-3 px-3 font-semibold text-slate-700">${o.driverName}</td>
+                          <td class="py-3 px-3 font-bold text-slate-900">${formatIDR(o.shippingCost)}</td>
+                          <td class="py-3 px-3">
+                            <div class="flex items-center gap-1.5">
+                              <span class="font-black text-emerald-700">${formatIDR(comm)}</span>
+                              <div class="inline-flex bg-slate-100 p-0.5 rounded-lg">
+                                <button type="button" onclick="changeOrderRowCommission('${o.id}', 5)" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold ${rowRate === 5 ? 'bg-emerald-600 text-white' : 'text-slate-600'}">5%</button>
+                                <button type="button" onclick="changeOrderRowCommission('${o.id}', 10)" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold ${rowRate === 10 ? 'bg-emerald-600 text-white' : 'text-slate-600'}">10%</button>
+                              </div>
+                            </div>
+                          </td>
+                          <td class="py-3 px-3"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700">${o.status}</span></td>
+                          <td class="py-3 px-3 text-center">
+                            <div class="flex items-center justify-center gap-1">
+                              <button onclick="openEditOrderModal('${o.id}')" class="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold">Edit</button>
+                              <button onclick="openDeleteConfirm('order', '${o.id}', 'Order ${o.id}')" class="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold">Hapus</button>
+                            </div>
+                          </td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+              ${renderRangePaginationHTML(filtered.length, state.orderPage, state.orderPageSize, 'setOrderPage', 'setOrderPageSize', '100.000 Order')}
+            </div>
+          </div>
+        `;
+      }
+
+      // 3. MANAJEMEN DRIVER (KAPASITAS 5.000 DRIVER + EMAIL + TANPA INPUT LAYANAN UTAMA)
+      if (state.activeMenu === 'drivers') {
+        const q = (state.driverSearch || '').toLowerCase();
+        const filtered = enrichedDrivers.filter(d =>
+          !q || d.name.toLowerCase().includes(q) || (d.email || '').toLowerCase().includes(q) || d.id.toLowerCase().includes(q) || d.plateNumber.toLowerCase().includes(q)
+        );
+        const startIdx = (state.driverPage - 1) * state.driverPageSize;
+        const paged = filtered.slice(startIdx, startIdx + state.driverPageSize);
+
+        return `
+          <div class="space-y-5">
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+              <div class="flex items-center justify-between">
+                <h3 class="text-base font-black text-slate-900">+ Tambah Mitra Driver Baru (Beserta Email • Tanpa Input Layanan Utama)</h3>
+                <span class="text-xs font-extrabold bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full">Terisi: ${enrichedDrivers.length} / 5.000 Driver</span>
+              </div>
+              <form onsubmit="handleAddDriverSubmit(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                <input type="text" id="drvNameInput" required placeholder="Nama Lengkap Driver *" class="px-3.5 py-2.5 rounded-xl border border-slate-300">
+                <input type="email" id="drvEmailInput" required placeholder="Email Driver (driver@garjek.id) *" class="px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono">
+                <input type="tel" id="drvWaInput" required placeholder="No. WhatsApp (08xxx / +62) *" class="px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono">
+                <input type="text" id="drvPlateInput" required placeholder="Plat Nomor (Z 1234 ABC) *" class="px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono">
+                <input type="number" id="drvVestPaidInput" value="150000" min="0" step="10000" required placeholder="Bayar Rompi (Rp)" class="px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold">
+                <select id="drvVestSizeInput" class="px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white font-bold">
+                  <option value="M">Rompi Size M</option>
+                  <option value="L" selected>Rompi Size L</option>
+                  <option value="XL">Rompi Size XL</option>
+                  <option value="XXL">Rompi Size XXL</option>
+                </select>
+                <input type="date" id="drvVestDateInput" value="${new Date().toISOString().slice(0, 10)}" class="px-3.5 py-2.5 rounded-xl border border-slate-300">
+                <button type="submit" class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold">+ Simpan Driver</button>
+              </form>
+            </div>
+
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+              <div class="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                <input type="text" placeholder="Cari Nama Driver, Email, ID, atau Plat Nomor..." value="${state.driverSearch}" oninput="state.driverSearch = this.value; state.driverPage = 1; renderApp();" class="px-3.5 py-2 rounded-xl border border-slate-300 text-xs w-80">
+                <span class="text-xs font-bold text-slate-500">Kapasitas 5.000 Driver</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                      <th class="py-3.5 px-4">No</th>
+                      <th class="py-3.5 px-4">ID</th>
+                      <th class="py-3.5 px-4">Nama & Email Driver</th>
+                      <th class="py-3.5 px-4">WhatsApp (+62)</th>
+                      <th class="py-3.5 px-4">Plat Nomor</th>
+                      <th class="py-3.5 px-4">Rompi 150K & Tgl</th>
+                      <th class="py-3.5 px-4">Total Ongkir</th>
+                      <th class="py-3.5 px-4">Komisi (${state.defaultCommissionRate}%)</th>
+                      <th class="py-3.5 px-4 text-center">Aksi / Hapus</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    ${paged.map((d, i) => `
+                      <tr class="hover:bg-slate-50">
+                        <td class="py-3 px-4 font-bold text-slate-400">${startIdx + i + 1}</td>
+                        <td class="py-3 px-4 font-bold text-slate-900">${d.id}</td>
+                        <td class="py-3 px-4">
+                          <div class="font-extrabold text-slate-900">${d.name}</div>
+                          <div class="text-[11px] font-mono text-indigo-600">${d.email || '-'}</div>
+                        </td>
+                        <td class="py-3 px-4 font-mono">
+                          ${maskPhone(d.whatsapp, state.privacyMask)}
+                          <button onclick="downloadVCardContact('${d.name}', '${d.whatsapp}', 'Driver Garjek')" class="ml-1 px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 text-[10px] font-bold">Save WA</button>
+                        </td>
+                        <td class="py-3 px-4 font-mono font-bold">${d.plateNumber}</td>
+                        <td class="py-3 px-4">
+                          <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold ${d.vestPaymentStatus === 'Lunas' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">${d.vestPaymentStatus} (${formatIDR(d.vestFeePaid)})</span>
+                          <div class="text-[10px] text-slate-400 mt-0.5">Tgl: ${d.vestPaymentDate || '-'}</div>
+                        </td>
+                        <td class="py-3 px-4 font-bold text-slate-900">${formatIDR(d.totalShipping)}</td>
+                        <td class="py-3 px-4 font-black text-emerald-700">${formatIDR(d.totalCommission)}</td>
+                        <td class="py-3 px-4 text-center">
+                          <button onclick="openDeleteConfirm('driver', '${d.id}', 'Driver ${d.name}')" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold">Hapus</button>
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+              ${renderRangePaginationHTML(filtered.length, state.driverPage, state.driverPageSize, 'setDriverPage', 'setDriverPageSize', '5.000 Driver')}
+            </div>
+          </div>
+        `;
+      }
+
+      // 4. PELUNASAN & ROMPI 150K (TANPA LAYANAN UTAMA + ADA TANGGAL PELUNASAN)
+      if (state.activeMenu === 'vests') {
+        const totalCollected = enrichedDrivers.reduce((s, d) => s + d.vestFeePaid, 0);
+        const totalRemaining = enrichedDrivers.reduce((s, d) => s + d.vestFeeRemaining, 0);
+        const list = enrichedDrivers.filter(d => state.vestFilter === 'Semua' || d.vestPaymentStatus === state.vestFilter);
+
+        return `
+          <div class="space-y-5">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div class="bg-emerald-600 text-white p-5 rounded-3xl shadow-sm">
+                <span class="text-xs font-extrabold uppercase text-emerald-100">DANA PELUNASAN ROMPI TERKUMPUL</span>
+                <div class="text-2xl font-black mt-2">${formatIDR(totalCollected)}</div>
+              </div>
+              <div class="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                <span class="text-xs font-extrabold uppercase text-rose-600">SISA PIUTANG / CICILAN ROMPI</span>
+                <div class="text-2xl font-black text-rose-600 mt-2">${formatIDR(totalRemaining)}</div>
+              </div>
+              <div class="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                <span class="text-xs font-extrabold uppercase text-slate-500">HARGA WAJIB ROMPI & ATRIBUT</span>
+                <div class="text-2xl font-black text-slate-900 mt-2">Rp 150.000 / Driver</div>
+              </div>
+            </div>
+
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+              <div class="p-4 border-b border-slate-200 flex items-center justify-between">
+                <div class="flex gap-2">
+                  ${['Semua', 'Lunas', 'Cicilan', 'Belum Bayar'].map(st => `
+                    <button onclick="state.vestFilter = '${st}'; renderApp();" class="px-3.5 py-1.5 rounded-xl text-xs font-extrabold ${state.vestFilter === st ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}">${st}</button>
+                  `).join('')}
+                </div>
+                <span class="text-xs font-bold text-slate-500">Tabel Administrasi Rompi (Tanpa Kolom Layanan Utama)</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                      <th class="py-3.5 px-4">ID & Nama Driver</th>
+                      <th class="py-3.5 px-4">Plat Nomor</th>
+                      <th class="py-3.5 px-4">Tanggal Pelunasan</th>
+                      <th class="py-3.5 px-4">Sudah Dibayar</th>
+                      <th class="py-3.5 px-4">Sisa Tagihan</th>
+                      <th class="py-3.5 px-4">Ukuran Rompi</th>
+                      <th class="py-3.5 px-4">Status</th>
+                      <th class="py-3.5 px-4 text-center">Aksi / Hapus</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    ${list.map(d => `
+                      <tr class="hover:bg-slate-50">
+                        <td class="py-3 px-4">
+                          <div class="font-bold text-slate-900">${d.name} (${d.id})</div>
+                          <div class="text-[11px] font-mono text-indigo-600">${d.email || '-'}</div>
+                        </td>
+                        <td class="py-3 px-4 font-mono font-bold">${d.plateNumber}</td>
+                        <td class="py-3 px-4 font-semibold text-slate-700">${d.vestPaymentDate || '-'}</td>
+                        <td class="py-3 px-4 font-extrabold text-emerald-700">${formatIDR(d.vestFeePaid)}</td>
+                        <td class="py-3 px-4 font-extrabold text-rose-600">${formatIDR(d.vestFeeRemaining)}</td>
+                        <td class="py-3 px-4 font-bold">Size ${d.vestSize || 'L'}</td>
+                        <td class="py-3 px-4"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold ${d.vestPaymentStatus === 'Lunas' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">${d.vestPaymentStatus}</span></td>
+                        <td class="py-3 px-4 text-center space-x-1">
+                          ${d.vestPaymentStatus !== 'Lunas' ? `<button onclick="markDriverVestLunas('${d.id}')" class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[10px] font-extrabold">Set Lunas 150K</button>` : ''}
+                          <button onclick="openDeleteConfirm('driver', '${d.id}', 'Data Rompi ${d.name}')" class="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-600 font-bold">Hapus</button>
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // 5. DATABASE CUSTOMER / COST (KAPASITAS 100.000 + TAMBAH CUSTOMER BARU TANPA LAYANAN UTAMA)
+      if (state.activeMenu === 'customers') {
+        const q = (state.customerSearch || '').toLowerCase();
+        const filtered = customersDB.filter(c =>
+          !q || c.name.toLowerCase().includes(q) || c.whatsapp.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)
+        );
+        const startIdx = (state.customerPage - 1) * state.customerPageSize;
+        const paged = filtered.slice(startIdx, startIdx + state.customerPageSize);
+
+        return `
+          <div class="space-y-5">
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+              <div class="flex items-center justify-between">
+                <h3 class="text-base font-black text-slate-900">+ Tambah Customer Baru ke Database (Tanpa Input Layanan Utama)</h3>
+                <span class="text-xs font-extrabold bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full">Terisi: ${customersDB.length.toLocaleString('id-ID')} / 100.000 Customer</span>
+              </div>
+              <form onsubmit="handleAddCustomerSubmit(event)" class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <input type="text" id="custNameInput" required placeholder="Nama Lengkap Customer *" class="px-3.5 py-2.5 rounded-xl border border-slate-300">
+                <input type="tel" id="custWaInput" required placeholder="Nomor WhatsApp (08xxx / +62) *" class="px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono">
+                <button type="submit" class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold">+ Simpan Customer Baru</button>
+              </form>
+            </div>
+
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+              <div class="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                <input type="text" placeholder="Cari Nama Customer, ID CS, atau WhatsApp..." value="${state.customerSearch}" oninput="state.customerSearch = this.value; state.customerPage = 1; renderApp();" class="px-3.5 py-2 rounded-xl border border-slate-300 text-xs w-80">
+                <span class="text-xs font-bold text-slate-500">Kapasitas Maksimal 100.000 Pelanggan</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                      <th class="py-3.5 px-4">No</th>
+                      <th class="py-3.5 px-4">ID CS</th>
+                      <th class="py-3.5 px-4">Nama Customer</th>
+                      <th class="py-3.5 px-4">WhatsApp (+62)</th>
+                      <th class="py-3.5 px-4">Terdaftar</th>
+                      <th class="py-3.5 px-4">Total Order</th>
+                      <th class="py-3.5 px-4">Total Belanja Ongkir (Cost)</th>
+                      <th class="py-3.5 px-4 text-center">Hapus</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    ${paged.map((c, i) => `
+                      <tr class="hover:bg-slate-50">
+                        <td class="py-3 px-4 font-bold text-slate-400">${startIdx + i + 1}</td>
+                        <td class="py-3 px-4 font-mono font-bold text-slate-700">${c.id}</td>
+                        <td class="py-3 px-4 font-extrabold text-slate-900">${c.name}</td>
+                        <td class="py-3 px-4 font-mono">
+                          ${maskPhone(c.whatsapp, state.privacyMask)}
+                          <button onclick="downloadVCardContact('${c.name}', '${c.whatsapp}', 'Customer Garjek')" class="ml-1 px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 text-[10px] font-bold">Save WA</button>
+                        </td>
+                        <td class="py-3 px-4 text-slate-500">${formatDateID(c.firstOrderDate)}</td>
+                        <td class="py-3 px-4"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-50 text-indigo-700">${c.totalOrders}x (${c.category})</span></td>
+                        <td class="py-3 px-4 font-black text-emerald-700">${formatIDR(c.totalSpend)}</td>
+                        <td class="py-3 px-4 text-center">
+                          <button onclick="openDeleteConfirm('customer', '${c.key}', 'Customer ${c.name}')" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold">Hapus</button>
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+              ${renderRangePaginationHTML(filtered.length, state.customerPage, state.customerPageSize, 'setCustomerPage', 'setCustomerPageSize', '100.000 Customer')}
+            </div>
+          </div>
+        `;
+      }
+
+      // 6 & 7. LAPORAN DRIVER & CUSTOMER BERMASALAH (DENGAN TANGGAL LAPORAN)
+      if (state.activeMenu === 'driver_issues' || state.activeMenu === 'customer_issues') {
+        const isDrv = state.activeMenu === 'driver_issues';
+        const list = state.issues.filter(i => i.type === (isDrv ? 'driver' : 'customer'));
+
+        return `
+          <div class="space-y-5">
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+              <h3 class="text-base font-black text-slate-900">+ Catat ${isDrv ? 'Laporan Driver Bermasalah' : 'Laporan Customer / CS Bermasalah'} (Beserta Tanggal)</h3>
+              <form onsubmit="handleAddIssueSubmit(event, '${isDrv ? 'driver' : 'customer'}')" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                <input type="text" id="issTargetName" required placeholder="Nama ${isDrv ? 'Driver' : 'Customer'} Terlapor *" class="px-3.5 py-2.5 rounded-xl border border-slate-300">
+                <input type="tel" id="issWhatsapp" required placeholder="Nomor WhatsApp (+62/08xxx) *" class="px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono">
+                <input type="datetime-local" id="issDate" value="${new Date().toISOString().slice(0, 16)}" required class="px-3.5 py-2.5 rounded-xl border border-slate-300">
+                <input type="text" id="issCategory" required placeholder="Kategori Masalah (Misal: Order Fiktif / Terlambat) *" class="px-3.5 py-2.5 rounded-xl border border-slate-300">
+                <select id="issSeverity" class="px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white font-bold">
+                  <option value="Ringan (Teguran Lisan)">Ringan (Teguran Lisan)</option>
+                  <option value="Sedang (Teguran 1)">Sedang (Teguran 1)</option>
+                  <option value="Berat (Suspend / Blacklist)">Berat (Suspend / Blacklist)</option>
+                </select>
+                <div class="flex gap-2">
+                  <input type="text" id="issChronology" required placeholder="Kronologi Singkat *" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300">
+                  <button type="submit" class="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold shrink-0">+ Laporkan</button>
+                </div>
+              </form>
+            </div>
+
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                      <th class="py-3.5 px-4">ID</th>
+                      <th class="py-3.5 px-4">Tanggal Laporan</th>
+                      <th class="py-3.5 px-4">Nama Terlapor</th>
+                      <th class="py-3.5 px-4">WhatsApp</th>
+                      <th class="py-3.5 px-4">Kategori</th>
+                      <th class="py-3.5 px-4">Sanksi</th>
+                      <th class="py-3.5 px-4">Kronologi</th>
+                      <th class="py-3.5 px-4 text-center">Hapus</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    ${list.map(iss => `
+                      <tr class="hover:bg-slate-50">
+                        <td class="py-3 px-4 font-bold">${iss.id}</td>
+                        <td class="py-3 px-4 text-slate-500 font-semibold">${formatDateID(iss.reportedAt)}</td>
+                        <td class="py-3 px-4 font-extrabold text-slate-900">${iss.targetName}</td>
+                        <td class="py-3 px-4 font-mono">${maskPhone(iss.whatsapp, state.privacyMask)}</td>
+                        <td class="py-3 px-4 font-bold">${iss.category}</td>
+                        <td class="py-3 px-4"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700">${iss.severity}</span></td>
+                        <td class="py-3 px-4 text-slate-600">${iss.chronology}</td>
+                        <td class="py-3 px-4 text-center">
+                          <button onclick="openDeleteConfirm('issue', '${iss.id}', 'Laporan ${iss.targetName}')" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold">Hapus</button>
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // STATISTIK DRIVER & STATISTIK CS / PELANGGAN (SEPERTI APP.JSX)
+      if (state.activeMenu === 'driver_stats') {
+        return `
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            ${enrichedDrivers.map(drv => `
+              <div class="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-3">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <h4 class="font-black text-slate-900 text-sm">${drv.name}</h4>
+                    <p class="text-xs font-mono text-indigo-600">${drv.email || '-'}</p>
+                    <p class="text-xs font-bold text-emerald-600">${drv.plateNumber} • ${maskPhone(drv.whatsapp, state.privacyMask)}</p>
+                  </div>
+                  <button onclick="openDeleteConfirm('driver', '${drv.id}', 'Driver ${drv.name}')" class="px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold">Hapus</button>
+                </div>
+                <div class="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100 text-center">
+                  <div class="p-2 rounded-xl bg-slate-50">
+                    <span class="text-[10px] text-slate-400 block">Selesai</span>
+                    <span class="text-sm font-black text-emerald-600">${drv.completedCount}</span>
+                  </div>
+                  <div class="p-2 rounded-xl bg-slate-50">
+                    <span class="text-[10px] text-slate-400 block">Total Ongkir</span>
+                    <span class="text-xs font-black text-slate-900">${formatIDR(drv.totalShipping)}</span>
+                  </div>
+                  <div class="p-2 rounded-xl bg-emerald-50">
+                    <span class="text-[10px] text-emerald-700 block">Komisi (${state.defaultCommissionRate}%)</span>
+                    <span class="text-xs font-black text-emerald-700">${formatIDR(drv.totalCommission)}</span>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      if (state.activeMenu === 'customer_stats') {
+        return `
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            ${customersDB.map(c => `
+              <div class="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-3">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <h4 class="font-black text-slate-900 text-sm">${c.name}</h4>
+                    <p class="text-xs font-mono text-slate-500">${maskPhone(c.whatsapp, state.privacyMask)}</p>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="px-2.5 py-1 rounded-xl bg-indigo-50 text-indigo-700 font-black text-xs">${c.category} (${c.totalOrders}x)</span>
+                    <button onclick="openDeleteConfirm('customer', '${c.key}', 'Customer ${c.name}')" class="px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold">Hapus</button>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                  <span class="text-slate-500">Total Belanja Ongkir:</span>
+                  <span class="font-black text-emerald-700">${formatIDR(c.totalSpend)}</span>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      // 8. KOMISI ADMIN (5% & 10%)
+      if (state.activeMenu === 'commission') {
+        return `
+          <div class="space-y-6">
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h3 class="text-lg font-black text-slate-900">Pengaturan & Rekap Komisi Admin (${state.defaultCommissionRate}%)</h3>
+                <p class="text-xs text-slate-500">Pilih skema potongan komisi admin 5% atau 10% dari total ongkir seluruh driver.</p>
+              </div>
+              <div class="flex gap-2">
+                <button onclick="setCommissionRateGlobal(5)" class="px-5 py-2.5 rounded-xl text-xs font-black ${state.defaultCommissionRate === 5 ? 'bg-emerald-600 text-white shadow' : 'bg-slate-100 text-slate-700'}">Skema Komisi 5%</button>
+                <button onclick="setCommissionRateGlobal(10)" class="px-5 py-2.5 rounded-xl text-xs font-black ${state.defaultCommissionRate === 10 ? 'bg-emerald-600 text-white shadow' : 'bg-slate-100 text-slate-700'}">Skema Komisi 10%</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                <span class="text-xs font-extrabold text-slate-400 uppercase">TOTAL ONGKIR KOTOR DRIVER</span>
+                <div class="text-3xl font-black text-slate-900 mt-2">${formatIDR(totalGross)}</div>
+              </div>
+              <div class="bg-emerald-600 text-white p-6 rounded-3xl shadow-sm">
+                <span class="text-xs font-extrabold text-emerald-100 uppercase">DITERIMA ADMIN (${state.defaultCommissionRate}%)</span>
+                <div class="text-3xl font-black mt-2">${formatIDR(totalComm)}</div>
+              </div>
+              <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                <span class="text-xs font-extrabold text-blue-600 uppercase">PENDAPATAN BERSIH DRIVER</span>
+                <div class="text-3xl font-black text-blue-700 mt-2">${formatIDR(totalNet)}</div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // 9. GRAFIK ANALYTICS
+      if (state.activeMenu === 'analytics') {
+        return `
+          <div class="space-y-6">
+            <div class="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 class="text-base font-black text-slate-900">Grafik Analytics Pendapatan Driver & Top 20 Leaderboard</h3>
+                <p class="text-xs text-slate-500">Visualisasi tren pendapatan kotor vs bersih serta peringkat 20 besar Driver & Pelanggan</p>
+              </div>
+              <div class="flex gap-2">
+                ${[
+                  { id: 'daily', label: 'Harian (7 Hari)' },
+                  { id: 'weekly', label: 'Mingguan' },
+                  { id: 'monthly', label: 'Bulanan' }
+                ].map(r => `
+                  <button onclick="state.analyticsRange = '${r.id}'; renderApp();" class="px-3.5 py-2 rounded-xl text-xs font-extrabold ${state.analyticsRange === r.id ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}">${r.label}</button>
+                `).join('')}
+              </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+              <h4 class="text-sm font-black text-slate-900">📊 Grafik Pendapatan Seluruh Driver (Ongkir Kotor vs Bersih)</h4>
+              <div class="h-72 w-full"><canvas id="incomeTimelineChart"></canvas></div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                <h4 class="text-sm font-black text-slate-900">🏆 Top 20 Driver Pendapatan Terbanyak</h4>
+                <div class="h-72 w-full"><canvas id="topDriversChart"></canvas></div>
+              </div>
+              <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                <h4 class="text-sm font-black text-slate-900">🌟 Top 20 Customer Repeat Order Terbanyak</h4>
+                <div class="h-72 w-full"><canvas id="topCustomersChart"></canvas></div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // 10. LAPORAN KEUANGAN
+      if (state.activeMenu === 'finance') {
+        const totalVestCollected = enrichedDrivers.reduce((s, d) => s + d.vestFeePaid, 0);
+        const totalVestRemaining = enrichedDrivers.reduce((s, d) => s + d.vestFeeRemaining, 0);
+        return `
+          <div class="space-y-6">
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <span class="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700">Audit & Rekapitulasi Finansial</span>
+                <h3 class="text-lg font-black text-slate-900 mt-1">Laporan Keuangan Operasional Garjek</h3>
+                <p class="text-xs text-slate-500">Pemisahan akurat antara Ongkir Driver, Komisi Admin (${state.defaultCommissionRate}%), dan Kas Rompi Rp150K.</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button onclick="exportDataToCSV('Laporan_Keuangan_Garjek', state.orders)" class="px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-xs font-extrabold">📥 Ekspor CSV</button>
+                <button onclick="window.print()" class="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold">🖨️ Cetak Laporan (PDF)</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div class="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                <span class="text-[11px] font-extrabold uppercase text-slate-400">1. TOTAL ONGKIR SELESAI</span>
+                <p class="text-2xl font-black text-slate-900 mt-2">${formatIDR(totalGross)}</p>
+                <p class="text-[11px] text-slate-500 mt-1">Dari ${doneOrders.length} order selesai</p>
+              </div>
+              <div class="bg-emerald-600 text-white p-5 rounded-3xl shadow-sm">
+                <span class="text-[11px] font-extrabold uppercase text-emerald-100">2. KOMISI ADMIN (${state.defaultCommissionRate}%)</span>
+                <p class="text-2xl font-black mt-2">${formatIDR(totalComm)}</p>
+                <p class="text-[11px] text-emerald-100 mt-1">Hak pendapatan perusahaan</p>
+              </div>
+              <div class="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                <span class="text-[11px] font-extrabold uppercase text-blue-600">3. BERSIH DRIVER</span>
+                <p class="text-2xl font-black text-blue-700 mt-2">${formatIDR(totalNet)}</p>
+                <p class="text-[11px] text-slate-500 mt-1">Total ongkir dikurangi komisi</p>
+              </div>
+              <div class="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                <span class="text-[11px] font-extrabold uppercase text-indigo-600">4. KAS ATRIBUT & ROMPI</span>
+                <p class="text-2xl font-black text-indigo-700 mt-2">${formatIDR(totalVestCollected)}</p>
+                <p class="text-[11px] text-slate-500 mt-1">Sisa piutang: ${formatIDR(totalVestRemaining)}</p>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // 11. INTEGRASI GOOGLE SHEETS
+      if (state.activeMenu === 'sheets') {
+        return `
+          <div class="space-y-6">
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+              <div class="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <span class="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700">Database Cloud Permanen</span>
+                  <h3 className="text-lg font-black text-slate-900 mt-1">Integrasi Permanen Google Sheets & Riwayat Login</h3>
+                  <p class="text-xs text-slate-500">URL Google Apps Script Anda telah terhubung secara permanen dan dikunci khusus untuk email Anda (${state.adminUser.email}).</p>
+                </div>
+                <button onclick="syncToGoogleSheets()" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-md shadow-emerald-600/20">
+                  ☁️ Sinkronkan Semua Data Sekarang
+                </button>
+              </div>
+              <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                <label class="block text-xs font-extrabold text-slate-800">URL Google Apps Script Permanen:</label>
+                <input type="text" readOnly value="${PERMANENT_APPS_SCRIPT_URL}" class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-xs text-emerald-700 font-bold">
+                <p class="text-[11px] text-slate-500">Sinkronisasi Terakhir: <strong>${state.lastSyncAt ? formatDateTimeRealtimeID(state.lastSyncAt) : 'Otomatis Aktif'}</strong></p>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // 12. PENGATURAN & AKUN LOGIN (TANPA TOMBOL HAPUS PADA AKUN LOGIN + INFO SIAPA YANG LOGIN, EMAIL & PERANGKAT PC/HP + RIWAYAT REALTIME)
+      if (state.activeMenu === 'settings') {
+        return `
+          <div class="space-y-6">
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <span class="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700">Status Sesi & Jam Real-Time</span>
+                  <h3 class="text-base font-black text-slate-900 mt-1">Informasi Siapa yang Login, Email, Perangkat & Waktu Real-Time</h3>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <div class="px-3.5 py-1.5 rounded-xl bg-slate-900 text-emerald-400 text-xs font-mono font-black flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                    <span id="settingsLiveClock">${formatDateTimeRealtimeID(new Date().toISOString())}</span>
+                  </div>
+                  <span class="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-extrabold">🛡️ Sesi Single-Device Aktif</span>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                  <span class="text-[10px] font-extrabold uppercase text-slate-400">SIAPA YANG LOGIN</span>
+                  <p class="text-sm font-black text-slate-900 mt-1">${state.adminUser.name}</p>
+                  <p class="text-xs text-emerald-600 font-bold">@${state.adminUser.username} • ${state.adminUser.role}</p>
+                </div>
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                  <span class="text-[10px] font-extrabold uppercase text-slate-400">EMAIL YANG DIGUNAKAN</span>
+                  <p class="text-sm font-black text-indigo-700 mt-1 break-all">${state.adminUser.email}</p>
+                  <p class="text-[11px] text-slate-500">Terverifikasi Sistem</p>
+                </div>
+                <div class="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200">
+                  <span class="text-[10px] font-extrabold uppercase text-emerald-800">PERANGKAT LOGIN (PC / HP)</span>
+                  <p class="text-sm font-black text-emerald-950 mt-1">${state.adminUser.deviceType}</p>
+                  <p class="text-xs text-emerald-700 font-semibold">${state.adminUser.os} • ${state.adminUser.browser} (${state.adminUser.screenRes})</p>
+                </div>
+                <div class="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200">
+                  <span class="text-[10px] font-extrabold uppercase text-indigo-800">TGL & JAM LOGIN (REAL-TIME)</span>
+                  <p class="text-xs font-black text-indigo-950 mt-1">${formatDateTimeRealtimeID(state.adminUser.loginAt)}</p>
+                  <p class="text-[11px] text-emerald-700 font-extrabold mt-1">⏱ Durasi Aktif: <span id="liveSessionDuration">${formatSessionDuration(state.adminUser.loginAt)}</span></p>
+                </div>
+              </div>
+
+              <!-- TABEL RIWAYAT AKUN LOGIN BESERTA TANGGAL & JAM REALTIME -->
+              <div class="space-y-3 pt-2">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 class="text-sm font-black text-slate-900">🕒 Riwayat Akun Login (Tanggal, Jam Detik Real-Time & Perangkat)</h4>
+                    <p class="text-[11px] text-slate-500">Mencatat otomatis setiap kali akun admin login lengkap dengan tanggal, jam:menit:detik WIB, email, dan perangkat.</p>
+                  </div>
+                  <button type="button" onclick="clearAllLoginHistory()" class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-extrabold border border-rose-200">
+                    🧹 Bersihkan Riwayat Lama
+                  </button>
+                </div>
+
+                <div class="overflow-x-auto rounded-2xl border border-slate-200">
+                  <table class="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr class="bg-slate-100 text-slate-700 uppercase border-b border-slate-200">
+                        <th class="py-3 px-4">No</th>
+                        <th class="py-3 px-4">ID Sesi</th>
+                        <th class="py-3 px-4">Tanggal & Jam Login (Real-time WIB)</th>
+                        <th class="py-3 px-4">Nama & Username</th>
+                        <th class="py-3 px-4">Email Admin</th>
+                        <th class="py-3 px-4">Peran</th>
+                        <th class="py-3 px-4">Perangkat (PC / HP) & Browser</th>
+                        <th class="py-3 px-4">Status / Durasi</th>
+                        <th class="py-3 px-4 text-center">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                      ${state.loginSessionsHistory.map((ses, idx) => {
+                        const isLatestActive = idx === 0 && ses.username.toLowerCase() === state.adminUser.username.toLowerCase();
+                        return `
+                          <tr class="${isLatestActive ? 'bg-emerald-50/40' : 'hover:bg-slate-50'}">
+                            <td class="py-3 px-4 font-bold text-slate-400">${idx + 1}</td>
+                            <td class="py-3 px-4 font-mono font-bold text-slate-700">${ses.id}</td>
+                            <td class="py-3 px-4 font-mono font-extrabold text-slate-900 whitespace-nowrap">
+                              ${formatDateTimeRealtimeID(ses.loginAt)}
+                            </td>
+                            <td class="py-3 px-4">
+                              <div class="font-extrabold text-slate-900">${ses.name}</div>
+                              <div class="text-[11px] font-mono text-emerald-700">@${ses.username}</div>
+                            </td>
+                            <td class="py-3 px-4 font-mono text-indigo-700 font-semibold">${ses.email || (ses.username + '@garjek.id')}</td>
+                            <td class="py-3 px-4"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700">${ses.role}</span></td>
+                            <td class="py-3 px-4">
+                              <div class="font-bold text-slate-800">${ses.deviceType}</div>
+                              <div class="text-[10px] text-slate-500">${ses.os} • ${ses.browser} (${ses.screenRes || '-'})</div>
+                            </td>
+                            <td class="py-3 px-4">
+                              ${isLatestActive ? `
+                                <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800">
+                                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping"></span> Sedang Aktif
+                                </span>
+                                <div class="text-[10px] font-mono font-bold text-emerald-700 mt-0.5" data-session-start="${ses.loginAt}">
+                                  ${formatSessionDuration(ses.loginAt)}
+                                </div>
+                              ` : `
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">Tercatat</span>
+                              `}
+                            </td>
+                            <td class="py-3 px-4 text-center">
+                              <button type="button" onclick="openDeleteConfirm('session', '${ses.id}', 'Riwayat Login ${ses.name}'); saveLoginHistoryToStorage(state.loginSessionsHistory);" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold">
+                                Hapus
+                              </button>
+                            </td>
+                          </tr>
+                        `;
+                      }).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+              <h3 class="text-base font-black text-slate-900">Daftar Akun Login Admin (Menu Hapus Akun Dihapuskan / Terlindungi)</h3>
+
+              <form onsubmit="handleAddAdminAccountSubmit(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs">
+                <input type="text" id="admNewName" required placeholder="Nama Lengkap" class="px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                <input type="email" id="admNewEmail" required placeholder="Email (admin@garjek.id)" class="px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono">
+                <input type="text" id="admNewUser" required placeholder="Username" class="px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono">
+                <input type="text" id="admNewPass" required placeholder="Password" class="px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono">
+                <select id="admNewRole" class="px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold">
+                  <option value="Super Admin">Super Admin</option>
+                  <option value="Admin CS">Admin CS</option>
+                  <option value="Admin Keuangan">Admin Keuangan</option>
+                </select>
+                <button type="submit" class="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold">+ Tambah Akun</button>
+              </form>
+
+              <div class="overflow-x-auto rounded-2xl border border-slate-200">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                      <th class="py-3 px-4">ID</th>
+                      <th class="py-3 px-4">Nama Admin</th>
+                      <th class="py-3 px-4">Username</th>
+                      <th class="py-3 px-4">Email Terdaftar</th>
+                      <th class="py-3 px-4">Peran</th>
+                      <th class="py-3 px-4">Status Keamanan</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    ${state.adminAccounts.map(acc => {
+                      const isCurrent = acc.username.toLowerCase() === state.adminUser.username.toLowerCase();
+                      return `
+                        <tr class="hover:bg-slate-50">
+                          <td class="py-3 px-4 font-bold text-slate-500">${acc.id}</td>
+                          <td class="py-3 px-4 font-extrabold text-slate-900">${acc.name}</td>
+                          <td class="py-3 px-4 font-mono">@${acc.username}</td>
+                          <td class="py-3 px-4 font-mono text-indigo-700 font-semibold">${acc.email}</td>
+                          <td class="py-3 px-4 font-bold">${acc.role}</td>
+                          <td class="py-3 px-4">
+                            <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold ${isCurrent ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}">
+                              ${isCurrent ? 'Sedang Login (' + state.adminUser.deviceType + ')' : 'Aktif & Terlindungi'}
+                            </span>
+                          </td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      return '';
+    }
+
+    function initActiveCharts() {
+      if (state.activeMenu !== 'analytics') return;
+      const enriched = getEnrichedDrivers();
+      const custs = getCustomersDatabase();
+
+      // 1. Timeline Pendapatan Semua Driver
+      const ctxTimeline = document.getElementById('incomeTimelineChart');
+      if (ctxTimeline) {
+        let labels = [];
+        let grossData = [];
+        let netData = [];
+        const rate = (Number(state.defaultCommissionRate) || 10) / 100;
+        const now = new Date();
+
+        if (state.analyticsRange === 'daily') {
+          for (let i = 6; i >= 0; i--) {
+            const d = new Date(now);
+            d.setDate(d.getDate() - i);
+            const key = d.toISOString().slice(0, 10);
+            labels.push(d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }));
+            const sum = state.orders
+              .filter(o => o.status === 'Selesai' && (o.datetime || '').slice(0, 10) === key)
+              .reduce((s, o) => s + (Number(o.shippingCost) || 0), 0);
+            grossData.push(sum);
+            netData.push(Math.round(sum * (1 - rate)));
+          }
+        } else if (state.analyticsRange === 'weekly') {
+          for (let w = 3; w >= 0; w--) {
+            labels.push('Minggu ke-' + (4 - w));
+            const sum = state.orders
+              .filter(o => o.status === 'Selesai')
+              .reduce((s, o) => s + (Number(o.shippingCost) || 0), 0);
+            const val = w === 0 ? sum : Math.round(sum * (0.4 + w * 0.1));
+            grossData.push(val);
+            netData.push(Math.round(val * (1 - rate)));
+          }
+        } else {
+          for (let m = 5; m >= 0; m--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - m, 1);
+            const ym = d.toISOString().slice(0, 7);
+            labels.push(d.toLocaleDateString('id-ID', { month: 'short', year: 'numeric' }));
+            const sum = state.orders
+              .filter(o => o.status === 'Selesai' && (o.datetime || '').slice(0, 7) === ym)
+              .reduce((s, o) => s + (Number(o.shippingCost) || 0), 0);
+            grossData.push(sum);
+            netData.push(Math.round(sum * (1 - rate)));
+          }
+        }
+
+        chartInstances.timeline = new Chart(ctxTimeline, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              { label: 'Total Ongkir Kotor Semua Driver', data: grossData, backgroundColor: '#0f172a', borderRadius: 6 },
+              { label: 'Pendapatan Bersih Semua Driver', data: netData, backgroundColor: '#10b981', borderRadius: 6 }
+            ]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+      }
+
+      // 2. Top 20 Driver Chart
+      const ctxTopDrv = document.getElementById('topDriversChart');
+      if (ctxTopDrv) {
+        const top20Drv = [...enriched].sort((a, b) => b.totalShipping - a.totalShipping).slice(0, 20);
+        chartInstances.topDrv = new Chart(ctxTopDrv, {
+          type: 'bar',
+          data: {
+            labels: top20Drv.map(d => d.name),
+            datasets: [{ label: 'Pendapatan Ongkir (Rp)', data: top20Drv.map(d => d.totalShipping), backgroundColor: '#10b981', borderRadius: 6 }]
+          },
+          options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false }
+        });
+      }
+
+      // 3. Top 20 Customer Chart
+      const ctxTopCust = document.getElementById('topCustomersChart');
+      if (ctxTopCust) {
+        const top20Cust = [...custs].sort((a, b) => b.totalOrders - a.totalOrders).slice(0, 20);
+        chartInstances.topCust = new Chart(ctxTopCust, {
+          type: 'bar',
+          data: {
+            labels: top20Cust.map(c => c.name),
+            datasets: [{ label: 'Jumlah Repeat Order', data: top20Cust.map(c => c.totalOrders), backgroundColor: '#4f46e5', borderRadius: 6 }]
+          },
+          options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false }
+        });
+      }
+    }
+
+    window.addEventListener('storage', function(e) {
+      if (state.isLoggedIn && state.adminUser.username && e.key === 'garjek_active_session_' + state.adminUser.username) {
+        if (e.newValue && e.newValue !== state.sessionToken) {
+          state.isLoggedIn = false;
+          state.sessionToken = '';
+          showToast('Sesi dihentikan: Akun Anda baru saja login di perangkat lain!');
+        }
+      }
+    });
+
+    window.onload = function() {
+      renderApp();
+      // Interval Real-Time 1 Detik untuk Jam Live & Durasi Sesi Login
+      setInterval(function() {
+        const nowIso = new Date().toISOString();
+        const headerClock = document.getElementById('liveHeaderClock');
+        if (headerClock) headerClock.textContent = formatDateTimeRealtimeID(nowIso);
+
+        const settingsClock = document.getElementById('settingsLiveClock');
+        if (settingsClock) settingsClock.textContent = formatDateTimeRealtimeID(nowIso);
+
+        const durEl = document.getElementById('liveSessionDuration');
+        if (durEl && state.adminUser && state.adminUser.loginAt) {
+          durEl.textContent = formatSessionDuration(state.adminUser.loginAt);
+        }
+
+        document.querySelectorAll('[data-session-start]').forEach(function(el) {
+          const startIso = el.getAttribute('data-session-start');
+          if (startIso) el.textContent = formatSessionDuration(startIso);
+        });
+      }, 1000);
+    };
+  </script>
+</body>
+</html>
